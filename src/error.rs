@@ -9,8 +9,6 @@ pub(crate) enum SystemError {
     MmapFail,
     #[error("mmap mapped to a different address")]
     MmapMismatchAddr,
-    #[error("Allocator run out of memory")]
-    ArrayAllocatorOutOfMemory,
 }
 
 #[derive(Debug, Error)]

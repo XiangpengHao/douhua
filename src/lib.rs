@@ -5,8 +5,9 @@ mod allocator;
 mod error;
 mod heap;
 mod list_node;
-mod obj_alloc;
 mod utils;
+
+pub use allocator::Allocator;
 
 const PM_PAGE_SIZE: usize = 2 * 1024 * 1024; // 2MB
 
