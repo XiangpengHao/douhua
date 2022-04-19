@@ -4,7 +4,10 @@ use super::{
     heap::{DRAMHeap, HeapManager, MemType, PMHeap},
     list_node::AtomicListNode,
 };
-use crate::{error::AllocError, poison_memory_region, unpoison_memory_region, PM_PAGE_SIZE};
+use crate::{
+    error::AllocError,
+    utils::{poison_memory_region, unpoison_memory_region, PM_PAGE_SIZE},
+};
 use std::{
     alloc::Layout,
     sync::{
@@ -271,7 +274,7 @@ mod tests {
     use super::AllocInner;
     use crate::{
         heap::{DRAMHeap, HeapManager, PMHeap},
-        PM_PAGE_SIZE,
+        utils::PM_PAGE_SIZE,
     };
     use std::alloc::Layout;
 

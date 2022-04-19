@@ -1,9 +1,12 @@
 use crate::{
     error::AllocError,
-    utils::mmap::{create_and_map_pool, map_dram_builder, unmap_memory},
+    utils::{
+        mmap::{create_and_map_pool, map_dram_builder, unmap_memory},
+        PM_PAGE_SIZE,
+    },
 };
 
-use super::{list_node::ListNode, PM_PAGE_SIZE};
+use super::list_node::ListNode;
 use std::{
     alloc::Layout,
     collections::HashMap,
@@ -306,8 +309,9 @@ fn align_up(size: usize, align: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use crate::utils::PM_PAGE_SIZE;
+
     use super::{DRAMHeap, HeapManager, PMHeap};
-    use crate::PM_PAGE_SIZE;
     use std::alloc::Layout;
 
     fn basic_heap_alloc<H: HeapManager>() {
