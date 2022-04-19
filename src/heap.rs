@@ -2,7 +2,7 @@ use crate::{
     error::AllocError,
     utils::{
         mmap::{create_and_map_pool, map_dram_builder, unmap_memory},
-        PM_PAGE_SIZE,
+        MemType, PM_PAGE_SIZE,
     },
 };
 
@@ -12,13 +12,6 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
 };
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-#[allow(clippy::upper_case_acronyms)]
-pub enum MemType {
-    DRAM,
-    PM,
-}
 
 /// To deallocate the memory we need a way to tell the memory type,
 /// i.e. we need to know where it comes from, {local, remote} {DRAM PM}

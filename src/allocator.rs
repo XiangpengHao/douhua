@@ -1,12 +1,12 @@
 use once_cell::sync::Lazy;
 
 use super::{
-    heap::{DRAMHeap, HeapManager, MemType, PMHeap},
+    heap::{DRAMHeap, HeapManager, PMHeap},
     list_node::AtomicListNode,
 };
 use crate::{
     error::AllocError,
-    utils::{poison_memory_region, unpoison_memory_region, PM_PAGE_SIZE},
+    utils::{poison_memory_region, unpoison_memory_region, MemType, PM_PAGE_SIZE},
 };
 use std::{
     alloc::Layout,
@@ -92,10 +92,12 @@ impl Allocator {
 
     /// # Safety
     /// unsafe inherit from GlobalAlloc
-    pub unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout, mem_type: MemType) {
-        match mem_type {
-            MemType::DRAM => self.dram.dealloc_inner(ptr, layout),
-            MemType::PM => self.pm.dealloc_inner(ptr, layout),
+    pub unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if self.dram.is_my_memory(ptr) {
+            self.dram.dealloc_inner(ptr, layout)
+        } else {
+            assert!(self.pm.is_my_memory(ptr));
+            self.pm.dealloc_inner(ptr, layout)
         }
     }
 }

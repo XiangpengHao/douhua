@@ -8,5 +8,4 @@ mod list_node;
 mod utils;
 
 pub use allocator::Allocator;
-pub use heap::MemType;
-
+pub use utils::MemType;

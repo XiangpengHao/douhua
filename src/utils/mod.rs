@@ -22,3 +22,10 @@ pub(crate) fn unpoison_memory_region(addr: *const u8, size: usize) {
         }
     }
 }
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum MemType {
+    DRAM,
+    PM,
+}
