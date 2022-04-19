@@ -90,48 +90,9 @@ impl Allocator {
     /// # Safety
     /// unsafe inherit from GlobalAlloc
     pub unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout, mem_type: MemType) {
-        fn dealloc_inner<T: HeapManager>(
-            alloc_inner: &AllocInner<T>,
-            ptr: *mut u8,
-            layout: Layout,
-        ) {
-            match list_index(&layout) {
-                Some(index) => {
-                    let mut next = alloc_inner.list_heads[index].load(Ordering::Acquire);
-                    loop {
-                        let new_node = AtomicListNode {
-                            next: AtomicPtr::new(next),
-                        };
-                        debug_assert!(std::mem::size_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
-                        debug_assert!(std::mem::align_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
-                        let new_node_ptr = AtomicListNode::from_u8_ptr_unchecked(ptr);
-                        unsafe {
-                            new_node_ptr.write(new_node);
-                        }
-                        match alloc_inner.list_heads[index].compare_exchange_weak(
-                            next,
-                            new_node_ptr,
-                            Ordering::Acquire,
-                            Ordering::Acquire,
-                        ) {
-                            Ok(_) => {
-                                poison_memory_region(ptr, layout.size());
-                                break;
-                            }
-                            Err(v) => next = v,
-                        };
-                    }
-                }
-                None => unsafe {
-                    let mut heap_manager = alloc_inner.heap_manager.lock().unwrap();
-                    heap_manager.dealloc_frame(ptr, layout);
-                },
-            }
-        }
-
         match mem_type {
-            MemType::DRAM => dealloc_inner(&self.dram, ptr, layout),
-            MemType::PM => dealloc_inner(&self.pm, ptr, layout),
+            MemType::DRAM => self.dram.dealloc_inner(ptr, layout),
+            MemType::PM => self.pm.dealloc_inner(ptr, layout),
         }
     }
 }
@@ -142,19 +103,29 @@ pub(crate) struct AllocInner<T: HeapManager> {
 }
 
 impl AllocInner<DRAMHeap> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
+        Self::with_capacity(HEAP_SIZE)
+    }
+
+    pub(crate) fn with_capacity(cap: usize) -> Self {
         AllocInner {
             list_heads: Default::default(),
-            heap_manager: Mutex::new(DRAMHeap::new(HEAP_SIZE)),
+            heap_manager: Mutex::new(DRAMHeap::new(cap)),
         }
     }
 }
 
 impl AllocInner<PMHeap> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
+        Self::with_capacity(HEAP_SIZE)
+    }
+
+    pub(crate) fn with_capacity(cap: usize) -> Self {
+        assert!(cap >= PM_PAGE_SIZE);
+
         AllocInner {
             list_heads: Default::default(),
-            heap_manager: Mutex::new(PMHeap::new(HEAP_SIZE)),
+            heap_manager: Mutex::new(PMHeap::new(cap)),
         }
     }
 }
@@ -248,5 +219,110 @@ impl<T: HeapManager> AllocInner<T> {
                 unsafe { heap_manager.alloc_frame(layout) }
             }
         }
+    }
+
+    pub(crate) fn dealloc_inner(&self, ptr: *mut u8, layout: Layout) {
+        assert!(
+            self.is_my_memory(ptr),
+            "dealloc ptr is not allocated by me!"
+        );
+
+        match list_index(&layout) {
+            Some(index) => {
+                let mut next = self.list_heads[index].load(Ordering::Acquire);
+                loop {
+                    let new_node = AtomicListNode {
+                        next: AtomicPtr::new(next),
+                    };
+                    debug_assert!(std::mem::size_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
+                    debug_assert!(std::mem::align_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
+                    let new_node_ptr = AtomicListNode::from_u8_ptr_unchecked(ptr);
+                    unsafe { new_node_ptr.write(new_node) };
+                    match self.list_heads[index].compare_exchange_weak(
+                        next,
+                        new_node_ptr,
+                        Ordering::Acquire,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => {
+                            poison_memory_region(ptr, layout.size());
+                            break;
+                        }
+                        Err(v) => next = v,
+                    };
+                }
+            }
+            None => {
+                let mut heap_manager = self.heap_manager.lock().unwrap();
+                unsafe { heap_manager.dealloc_frame(ptr, layout) };
+            }
+        }
+    }
+
+    // test if a ptr is allocated by me
+    fn is_my_memory(&self, ptr: *mut u8) -> bool {
+        let range = T::mem_addr_range();
+        (ptr as usize & range as usize) == range as usize
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AllocInner;
+    use crate::{
+        heap::{DRAMHeap, HeapManager, PMHeap},
+        PM_PAGE_SIZE,
+    };
+    use std::alloc::Layout;
+
+    fn basic_alloc_inner<H: HeapManager>(alloc: AllocInner<H>) {
+        let alloc_layout = Layout::from_size_align(64, 64).unwrap();
+        let max_cnt = PM_PAGE_SIZE / alloc_layout.size();
+
+        let mut allocated = vec![];
+
+        // allocate all memory, the layout are aligned so we can use all the memory
+        for i in 0..max_cnt {
+            let ptr = alloc.safe_alloc(alloc_layout).unwrap();
+            unsafe {
+                for j in 0..alloc_layout.size() {
+                    ptr.add(j).write(i as u8);
+                }
+            }
+            allocated.push(ptr);
+        }
+
+        // now we cannot allocate any more
+        assert!(alloc.safe_alloc(alloc_layout).is_err());
+
+        // check sanity and dealloc them
+        for (i, ptr) in allocated.into_iter().enumerate() {
+            for j in 0..alloc_layout.size() {
+                assert_eq!(unsafe { ptr.add(j).read() }, i as u8);
+            }
+            alloc.dealloc_inner(ptr, alloc_layout);
+        }
+
+        // now we can allocate again
+        for i in 0..max_cnt {
+            let ptr = alloc.safe_alloc(alloc_layout).unwrap();
+            unsafe {
+                for j in 0..alloc_layout.size() {
+                    ptr.add(j).write(i as u8);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dram_inner() {
+        let alloc = AllocInner::<DRAMHeap>::with_capacity(PM_PAGE_SIZE);
+        basic_alloc_inner(alloc);
+    }
+
+    #[test]
+    fn pm_inner() {
+        let alloc = AllocInner::<PMHeap>::with_capacity(PM_PAGE_SIZE);
+        basic_alloc_inner(alloc);
     }
 }

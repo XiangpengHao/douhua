@@ -79,7 +79,7 @@ pub(crate) trait HeapManager: Send + Sync {
     /// Deallocate memory is unsafe
     unsafe fn dealloc_frame(&mut self, ptr: *mut u8, layout: Layout);
 
-    fn mem_addr_range(&self) -> MemAddrRange;
+    fn mem_addr_range() -> MemAddrRange;
 }
 
 pub struct PMHeap {
@@ -132,7 +132,7 @@ impl HeapManager for PMHeap {
         }
     }
 
-    fn mem_addr_range(&self) -> MemAddrRange {
+    fn mem_addr_range() -> MemAddrRange {
         MemAddrRange::from_mem_type(MemType::PM)
     }
 }
@@ -256,7 +256,7 @@ impl HeapManager for DRAMHeap {
         }
     }
 
-    fn mem_addr_range(&self) -> MemAddrRange {
+    fn mem_addr_range() -> MemAddrRange {
         MemAddrRange::from_mem_type(MemType::DRAM)
     }
 }
@@ -311,7 +311,7 @@ mod tests {
     fn basic_heap_alloc<H: HeapManager>() {
         let page_cnt = 16;
         let mut heap = H::new(PM_PAGE_SIZE * page_cnt);
-        let addr_range = heap.mem_addr_range();
+        let addr_range = H::mem_addr_range();
 
         let page_layout = Layout::from_size_align(PM_PAGE_SIZE, PM_PAGE_SIZE).unwrap();
 
