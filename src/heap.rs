@@ -11,6 +11,7 @@ use std::{
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum MemType {
     DRAM,
     PM,
@@ -20,6 +21,7 @@ pub enum MemType {
 /// i.e. we need to know where it comes from, {local, remote} {DRAM PM}
 /// The easiest way is to partition the virtual memory address.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[allow(clippy::upper_case_acronyms)]
 #[allow(clippy::enum_clike_unportable_variant)]
 pub(crate) enum MemAddrRange {
     DRAM = 0x5a00_0000_0000,
@@ -151,7 +153,7 @@ impl PMHeap {
     pub fn alloc_large_from(
         &mut self,
         layout: Layout,
-        pool_dir: &String,
+        pool_dir: &str,
     ) -> Result<*mut u8, AllocError> {
         let aligned_size = align_up(layout.size(), PM_PAGE_SIZE);
 
