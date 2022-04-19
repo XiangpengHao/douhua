@@ -68,7 +68,7 @@ impl InnerHeap {
     }
 }
 
-pub trait HeapManager: Send + Sync {
+pub(crate) trait HeapManager: Send + Sync {
     fn new(heap_size: usize) -> Self;
 
     /// # Safety
@@ -78,6 +78,8 @@ pub trait HeapManager: Send + Sync {
     /// # Safety
     /// Deallocate memory is unsafe
     unsafe fn dealloc_frame(&mut self, ptr: *mut u8, layout: Layout);
+
+    fn mem_addr_range(&self) -> MemAddrRange;
 }
 
 pub struct PMHeap {
@@ -128,6 +130,10 @@ impl HeapManager for PMHeap {
         } else {
             self.dealloc_large(ptr, layout);
         }
+    }
+
+    fn mem_addr_range(&self) -> MemAddrRange {
+        MemAddrRange::from_mem_type(MemType::PM)
     }
 }
 
@@ -199,14 +205,6 @@ impl Drop for PMHeap {
     }
 }
 
-/// This is a wrapper around mmap,
-/// during init it maps a PM backed file,
-/// and only allocate PM_PAGE_SIZE amount memory at a time.
-/// Limitations:
-/// 1. FIXME: application crash might leave dangling files in persistent memory (we should fix this later)
-/// 2. FIXME: ideally we should have an trait for HeapManager, and separate the PMHeapManager and DRAMHeapManager.
-/// The problem is we can't use trait in struct definition,
-/// i.e. we can't do `heap_manger: impl HeapManager`.
 pub struct DRAMHeap {
     inner_heap: InnerHeap,
     virtual_high_addr: *mut u8,
@@ -219,11 +217,8 @@ impl HeapManager for DRAMHeap {
     fn new(heap_size: usize) -> Self {
         let addr = MemAddrRange::from_mem_type(MemType::DRAM) as usize as *const u8;
 
-        let heap_start = DRAMHeap::map_dram_pool(heap_size, Some(addr as *const u8));
-        let heap_start = match heap_start {
-            Ok(heap_start) => heap_start,
-            Err(error) => panic!("Failed to create heap manager, err: {}", error),
-        };
+        let heap_start = DRAMHeap::map_dram_pool(heap_size, Some(addr as *const u8))
+            .expect("failed to create DRAM heap pool!");
         let inner_heap = InnerHeap {
             heap_size,
             heap_start,
@@ -259,6 +254,10 @@ impl HeapManager for DRAMHeap {
         } else {
             self.dealloc_large(ptr, layout)
         }
+    }
+
+    fn mem_addr_range(&self) -> MemAddrRange {
+        MemAddrRange::from_mem_type(MemType::DRAM)
     }
 }
 
@@ -301,4 +300,58 @@ impl DRAMHeap {
 /// Requires that `align` is a power of two.
 fn align_up(size: usize, align: usize) -> usize {
     (size + align - 1) & !(align - 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DRAMHeap, HeapManager, PMHeap};
+    use crate::PM_PAGE_SIZE;
+    use std::alloc::Layout;
+
+    fn basic_heap_alloc<H: HeapManager>() {
+        let page_cnt = 16;
+        let mut heap = H::new(PM_PAGE_SIZE * page_cnt);
+        let addr_range = heap.mem_addr_range();
+
+        let page_layout = Layout::from_size_align(PM_PAGE_SIZE, PM_PAGE_SIZE).unwrap();
+
+        // allocate all pages
+        let mut allocated = vec![];
+        for _i in 0..page_cnt {
+            let ptr = unsafe { heap.alloc_frame(page_layout).unwrap() };
+            assert_eq!(ptr as usize % PM_PAGE_SIZE, 0);
+            assert_eq!(ptr as usize & addr_range as usize, addr_range as usize);
+            allocated.push(ptr);
+        }
+
+        // can't allocate more
+        unsafe {
+            assert!(heap.alloc_frame(page_layout).is_err());
+        }
+
+        // deallocate them
+        for ptr in allocated {
+            unsafe {
+                heap.dealloc_frame(ptr, page_layout);
+            }
+        }
+
+        // can allocate again
+        let mut allocated = vec![];
+        for _i in 0..page_cnt {
+            let ptr = unsafe { heap.alloc_frame(page_layout).unwrap() };
+            assert_eq!(ptr as usize % PM_PAGE_SIZE, 0);
+            allocated.push(ptr);
+        }
+    }
+
+    #[test]
+    fn dram_heap() {
+        basic_heap_alloc::<DRAMHeap>();
+    }
+
+    #[test]
+    fn pm_heap() {
+        basic_heap_alloc::<PMHeap>();
+    }
 }
