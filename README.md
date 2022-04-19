@@ -1,3 +1,3 @@
 # Douhua
 
-Douhua is a simple multi-tier allocator.
+Douhua is a simple allocator that supports multi-tier memory.
