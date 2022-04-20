@@ -2,6 +2,8 @@ pub(crate) mod mmap;
 
 pub(crate) const PM_PAGE_SIZE: usize = 2 * 1024 * 1024; // 2MB
 
+use crate::heap::MemAddrRange;
+
 extern "C" {
     fn __asan_unpoison_memory_region(addr: *const u8, size: usize);
     fn __asan_poison_memory_region(addr: *const u8, size: usize);
@@ -28,4 +30,23 @@ pub(crate) fn unpoison_memory_region(addr: *const u8, size: usize) {
 pub enum MemType {
     DRAM,
     PM,
+}
+
+impl From<MemAddrRange> for MemType {
+    fn from(range: MemAddrRange) -> Self {
+        match range {
+            MemAddrRange::DRAM => MemType::DRAM,
+            MemAddrRange::PM => MemType::PM,
+        }
+    }
+}
+
+/// This is api a bit controversial, I don't think the caller should rely on the allocator to differentiate the memory location.
+/// Instead the caller should track from where they allocate memory.
+/// I keep this around just for fast prototyping, it is not a required api.
+impl From<*mut u8> for MemType {
+    fn from(addr: *mut u8) -> Self {
+        let range = MemAddrRange::from(addr);
+        MemType::from(range)
+    }
 }

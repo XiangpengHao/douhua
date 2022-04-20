@@ -24,11 +24,23 @@ pub(crate) enum MemAddrRange {
     PM = 0x5d00_0000_0000,
 }
 
-impl MemAddrRange {
-    pub fn from_mem_type(t: MemType) -> Self {
+impl From<MemType> for MemAddrRange {
+    fn from(t: MemType) -> Self {
         match t {
             MemType::PM => MemAddrRange::PM,
             MemType::DRAM => MemAddrRange::DRAM,
+        }
+    }
+}
+
+impl From<*mut u8> for MemAddrRange {
+    fn from(addr: *mut u8) -> Self {
+        let dram_range = MemAddrRange::DRAM as usize;
+        if (addr as usize & dram_range) == dram_range {
+            MemAddrRange::DRAM
+        } else {
+            assert!(((addr as usize) & (MemAddrRange::PM as usize)) == MemAddrRange::PM as usize);
+            MemAddrRange::PM
         }
     }
 }
@@ -92,7 +104,7 @@ unsafe impl Sync for PMHeap {}
 
 impl HeapManager for PMHeap {
     fn new(heap_size: usize) -> Self {
-        let virtual_high_addr = MemAddrRange::from_mem_type(MemType::PM) as usize as *mut u8;
+        let virtual_high_addr = MemAddrRange::from(MemType::PM) as usize as *mut u8;
 
         let mut manager = PMHeap {
             inner_heap: InnerHeap {
@@ -131,7 +143,7 @@ impl HeapManager for PMHeap {
     }
 
     fn mem_addr_range() -> MemAddrRange {
-        MemAddrRange::from_mem_type(MemType::PM)
+        MemAddrRange::from(MemType::PM)
     }
 }
 
@@ -213,7 +225,7 @@ unsafe impl Sync for DRAMHeap {}
 
 impl HeapManager for DRAMHeap {
     fn new(heap_size: usize) -> Self {
-        let addr = MemAddrRange::from_mem_type(MemType::DRAM) as usize as *const u8;
+        let addr = MemAddrRange::from(MemType::DRAM) as usize as *const u8;
 
         let heap_start = DRAMHeap::map_dram_pool(heap_size, Some(addr as *const u8))
             .expect("failed to create DRAM heap pool!");
@@ -255,7 +267,7 @@ impl HeapManager for DRAMHeap {
     }
 
     fn mem_addr_range() -> MemAddrRange {
-        MemAddrRange::from_mem_type(MemType::DRAM)
+        MemAddrRange::from(MemType::DRAM)
     }
 }
 
