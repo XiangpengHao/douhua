@@ -44,8 +44,8 @@ impl From<MemAddrRange> for MemType {
 /// This is api a bit controversial, I don't think the caller should rely on the allocator to differentiate the memory location.
 /// Instead the caller should track from where they allocate memory.
 /// I keep this around just for fast prototyping, it is not a required api.
-impl From<*mut u8> for MemType {
-    fn from(addr: *mut u8) -> Self {
+impl From<*const u8> for MemType {
+    fn from(addr: *const u8) -> Self {
         let range = MemAddrRange::from(addr);
         MemType::from(range)
     }

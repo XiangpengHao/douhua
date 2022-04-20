@@ -33,13 +33,16 @@ impl From<MemType> for MemAddrRange {
     }
 }
 
-impl From<*mut u8> for MemAddrRange {
-    fn from(addr: *mut u8) -> Self {
+impl From<*const u8> for MemAddrRange {
+    fn from(addr: *const u8) -> Self {
         let dram_range = MemAddrRange::DRAM as usize;
         if (addr as usize & dram_range) == dram_range {
             MemAddrRange::DRAM
         } else {
-            assert!(((addr as usize) & (MemAddrRange::PM as usize)) == MemAddrRange::PM as usize);
+            assert!(
+                ((addr as usize) & (MemAddrRange::PM as usize)) == MemAddrRange::PM as usize,
+                "The memory address is not from Douhua! Something extremely bad happened!"
+            );
             MemAddrRange::PM
         }
     }
