@@ -13,8 +13,8 @@ thiserror = "1.0.30"
 
 [dev-dependencies]
 crossbeam-queue = "0.3.5"
-shuttle = "0.1.0"
-rand = "0.8.5"
+shuttle = { path = "../shuttle" }
+rand = "0.7.3"
 
 [features]
 sans = []

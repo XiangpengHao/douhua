@@ -82,7 +82,7 @@ impl InnerHeap {
 }
 
 pub(crate) trait HeapManager: Send + Sync {
-    fn new(heap_size: usize) -> Self;
+    fn new(heap_size: usize, heap_start_addr: *mut u8) -> Self;
 
     /// # Safety
     /// Allocates frame using mmap is unsafe
@@ -106,17 +106,17 @@ unsafe impl Send for PMHeap {}
 unsafe impl Sync for PMHeap {}
 
 impl HeapManager for PMHeap {
-    fn new(heap_size: usize) -> Self {
-        let virtual_high_addr = MemAddrRange::from(MemType::PM) as usize as *mut u8;
+    fn new(heap_size: usize, heap_start_addr: *mut u8) -> Self {
+        // let virtual_high_addr = MemAddrRange::from(MemType::PM) as usize as *mut u8;
 
         let mut manager = PMHeap {
             inner_heap: InnerHeap {
                 heap_size,
-                high_addr: virtual_high_addr,
+                high_addr: heap_start_addr,
                 head: ListNode::new(),
-                heap_start: virtual_high_addr,
+                heap_start: heap_start_addr,
             },
-            virtual_high_addr,
+            virtual_high_addr: heap_start_addr,
             files: HashMap::new(),
         };
 
@@ -227,20 +227,19 @@ unsafe impl Send for DRAMHeap {}
 unsafe impl Sync for DRAMHeap {}
 
 impl HeapManager for DRAMHeap {
-    fn new(heap_size: usize) -> Self {
-        let addr = MemAddrRange::from(MemType::DRAM) as usize as *const u8;
-
-        let heap_start = DRAMHeap::map_dram_pool(heap_size, Some(addr as *const u8))
-            .expect("failed to create DRAM heap pool!");
+    fn new(heap_size: usize, heap_start_addr: *mut u8) -> Self {
+        let heap_start_addr =
+            DRAMHeap::map_dram_pool(heap_size, Some(heap_start_addr as *const u8))
+                .expect("failed to create DRAM heap pool!");
         let inner_heap = InnerHeap {
             heap_size,
-            heap_start,
-            high_addr: heap_start,
+            heap_start: heap_start_addr,
+            high_addr: heap_start_addr,
             head: ListNode::new(),
         };
         DRAMHeap {
             inner_heap,
-            virtual_high_addr: unsafe { heap_start.add(heap_size) },
+            virtual_high_addr: unsafe { heap_start_addr.add(heap_size) },
         }
     }
 
@@ -319,12 +318,15 @@ fn align_up(size: usize, align: usize) -> usize {
 mod tests {
     use crate::utils::PM_PAGE_SIZE;
 
-    use super::{DRAMHeap, HeapManager, PMHeap};
+    use super::*;
     use std::alloc::Layout;
 
-    fn basic_heap_alloc<H: HeapManager>() {
+    fn basic_heap_alloc<H: HeapManager>(mem_type: MemType) {
         let page_cnt = 16;
-        let mut heap = H::new(PM_PAGE_SIZE * page_cnt);
+        let mut heap = H::new(
+            PM_PAGE_SIZE * page_cnt,
+            MemAddrRange::from(mem_type) as usize as *mut u8,
+        );
         let addr_range = H::mem_addr_range();
 
         let page_layout = Layout::from_size_align(PM_PAGE_SIZE, PM_PAGE_SIZE).unwrap();
@@ -361,11 +363,11 @@ mod tests {
 
     #[test]
     fn dram_heap() {
-        basic_heap_alloc::<DRAMHeap>();
+        basic_heap_alloc::<DRAMHeap>(MemType::DRAM);
     }
 
     #[test]
     fn pm_heap() {
-        basic_heap_alloc::<PMHeap>();
+        basic_heap_alloc::<PMHeap>(MemType::PM);
     }
 }

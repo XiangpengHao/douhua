@@ -1,3 +1,4 @@
+pub(crate) mod backoff;
 pub(crate) mod mmap;
 
 pub(crate) const PM_PAGE_SIZE: usize = 2 * 1024 * 1024; // 2MB
@@ -48,12 +49,5 @@ impl From<*const u8> for MemType {
     fn from(addr: *const u8) -> Self {
         let range = MemAddrRange::from(addr);
         MemType::from(range)
-    }
-}
-
-pub(crate) fn shuttle_yield() {
-    #[cfg(all(feature = "shuttle", test))]
-    {
-        shuttle::thread::yield_now();
     }
 }

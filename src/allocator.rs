@@ -6,7 +6,10 @@ use super::{
 };
 use crate::{
     error::AllocError,
-    utils::{poison_memory_region, shuttle_yield, unpoison_memory_region, MemType, PM_PAGE_SIZE},
+    heap::MemAddrRange,
+    utils::{
+        backoff::Backoff, poison_memory_region, unpoison_memory_region, MemType, PM_PAGE_SIZE,
+    },
 };
 use std::alloc::Layout;
 use std::sync::Mutex;
@@ -110,28 +113,28 @@ pub(crate) struct AllocInner<T: HeapManager> {
 
 impl AllocInner<DRAMHeap> {
     pub(crate) fn new() -> Self {
-        Self::with_capacity(HEAP_SIZE)
+        Self::with_capacity(HEAP_SIZE, MemAddrRange::DRAM as usize as *mut u8)
     }
 
-    pub(crate) fn with_capacity(cap: usize) -> Self {
+    pub(crate) fn with_capacity(cap: usize, heap_start_addr: *mut u8) -> Self {
         AllocInner {
             list_heads: Default::default(),
-            heap_manager: Mutex::new(DRAMHeap::new(cap)),
+            heap_manager: Mutex::new(DRAMHeap::new(cap, heap_start_addr)),
         }
     }
 }
 
 impl AllocInner<PMHeap> {
     pub(crate) fn new() -> Self {
-        Self::with_capacity(HEAP_SIZE)
+        Self::with_capacity(HEAP_SIZE, MemAddrRange::PM as usize as *mut u8)
     }
 
-    pub(crate) fn with_capacity(cap: usize) -> Self {
+    pub(crate) fn with_capacity(cap: usize, heap_start_addr: *mut u8) -> Self {
         assert!(cap >= PM_PAGE_SIZE);
 
         AllocInner {
             list_heads: Default::default(),
-            heap_manager: Mutex::new(PMHeap::new(cap)),
+            heap_manager: Mutex::new(PMHeap::new(cap, heap_start_addr)),
         }
     }
 }
@@ -142,11 +145,12 @@ impl<T: HeapManager> AllocInner<T> {
         let size_class = list_index(&layout);
         match size_class {
             Some(index) => {
+                let backoff = Backoff::new();
                 let mut node = self.list_heads[index].load(Ordering::Acquire);
                 loop {
                     // if node is locked, wait until other threads unlock it
                     if node as usize == usize::MAX {
-                        shuttle_yield();
+                        backoff.spin();
                         node = self.list_heads[index].load(Ordering::Acquire);
                         continue;
                     }
@@ -164,6 +168,7 @@ impl<T: HeapManager> AllocInner<T> {
                             Err(v) => {
                                 node = v;
                                 poison_memory_region(node as *const u8, layout.size());
+                                backoff.spin();
                                 continue;
                             }
                         }
@@ -179,7 +184,7 @@ impl<T: HeapManager> AllocInner<T> {
                         Ok(_v) => {}
                         Err(v) => {
                             node = v;
-                            shuttle_yield();
+                            backoff.spin();
                             continue;
                         }
                     }
@@ -194,8 +199,8 @@ impl<T: HeapManager> AllocInner<T> {
                     let mut heap_manager = if let Ok(h) = self.heap_manager.try_lock() {
                         h
                     } else {
-                        shuttle_yield();
-                        node = self.list_heads[index].load(Ordering::Acquire);
+                        backoff.spin();
+                        self.list_heads[index].store(node, Ordering::Release);
                         continue;
                     };
 
@@ -296,7 +301,7 @@ impl<T: HeapManager> AllocInner<T> {
 mod tests {
     use super::AllocInner;
     use crate::{
-        heap::{DRAMHeap, HeapManager, PMHeap},
+        heap::{DRAMHeap, HeapManager, MemAddrRange, PMHeap},
         utils::PM_PAGE_SIZE,
     };
     use std::alloc::Layout;
@@ -342,18 +347,22 @@ mod tests {
 
     #[test]
     fn dram_inner() {
-        let alloc = AllocInner::<DRAMHeap>::with_capacity(PM_PAGE_SIZE);
+        let alloc = AllocInner::<DRAMHeap>::with_capacity(
+            PM_PAGE_SIZE,
+            MemAddrRange::DRAM as usize as *mut u8,
+        );
         basic_alloc_inner(alloc);
     }
 
     #[test]
     fn pm_inner() {
-        let alloc = AllocInner::<PMHeap>::with_capacity(PM_PAGE_SIZE);
+        let alloc =
+            AllocInner::<PMHeap>::with_capacity(PM_PAGE_SIZE, MemAddrRange::PM as usize as *mut u8);
         basic_alloc_inner(alloc);
     }
 
     enum Operation {
-        Alloc128,
+        Alloc512,
         Alloc256,
         Alloc1024,
         Dealloc,
@@ -362,8 +371,8 @@ mod tests {
     impl Operation {
         fn gen(rng: &mut impl Rng) -> Self {
             match rng.gen_range(0, 4) {
-                0 => Operation::Alloc128,
-                1 => Operation::Alloc256,
+                0 => Operation::Alloc256,
+                1 => Operation::Alloc512,
                 2 => Operation::Alloc1024,
                 3 => Operation::Dealloc,
                 _ => unreachable!(),
@@ -385,8 +394,9 @@ mod tests {
         std::thread,
     };
 
-    fn mt_basic() {
-        let alloc = AllocInner::<DRAMHeap>::with_capacity(PM_PAGE_SIZE * 3);
+    fn mt_basic(heap_addr: &std::sync::atomic::AtomicUsize) {
+        let addr = heap_addr.fetch_add(1024 * 1024 * 1024, std::sync::atomic::Ordering::SeqCst);
+        let alloc = AllocInner::<DRAMHeap>::with_capacity(PM_PAGE_SIZE * 3, addr as *mut u8);
         let alloc = Arc::new(alloc);
 
         let allocated = Arc::new(crossbeam_queue::SegQueue::<(usize, usize)>::new());
@@ -398,12 +408,11 @@ mod tests {
             let alloc = alloc.clone();
             let h = thread::spawn(move || {
                 let mut rng = thread_rng();
-                let tid = thread::current().id();
 
-                for _i in 0..32 {
+                for _i in 0..16 {
                     let layout = match Operation::gen(&mut rng) {
-                        Operation::Alloc128 => Layout::from_size_align(128, 8).unwrap(),
                         Operation::Alloc256 => Layout::from_size_align(256, 8).unwrap(),
+                        Operation::Alloc512 => Layout::from_size_align(512, 8).unwrap(),
                         Operation::Alloc1024 => Layout::from_size_align(1024, 8).unwrap(),
                         Operation::Dealloc => {
                             if let Some((ptr, size)) = allocated.pop() {
@@ -434,33 +443,38 @@ mod tests {
     #[cfg(not(feature = "shuttle"))]
     #[test]
     fn mt_basic_test() {
-        mt_basic();
+        let heap_addr = std::sync::atomic::AtomicUsize::new(MemAddrRange::DRAM as usize);
+        mt_basic(&heap_addr);
     }
 
     #[cfg(feature = "shuttle")]
     #[test]
     fn shuttle_mt_basic() {
         let mut config = shuttle::Config::default();
-        config.max_steps = shuttle::MaxSteps::None;
         let mut runner = shuttle::PortfolioRunner::new(true, config);
-        runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
         // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
         // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
         // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
+        // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
         // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
         // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
         // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
-        // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
+        runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
 
-        runner.run(mt_basic);
+        let heap_addr = std::sync::atomic::AtomicUsize::new(MemAddrRange::DRAM as usize);
+
+        runner.run(move || {
+            mt_basic(&heap_addr);
+        });
     }
 
     #[cfg(feature = "shuttle")]
     #[test]
     fn shuttle_replay() {
+        let heap_addr = std::sync::atomic::AtomicUsize::new(MemAddrRange::DRAM as usize);
         shuttle::replay(
-            mt_basic,
-            "910149adaab389ceb0bee9dd0180abaaeaaa5a5555abaa6a55adaaab6a550000",
+            move || mt_basic(&heap_addr),
+            "91028a018b9ec5a6d08dddab4dd0033c454a22254992444a244f4ae412498a4c51148b525212f5224b144551142592e2259112258abaf822450100000000000000",
         )
     }
 }
