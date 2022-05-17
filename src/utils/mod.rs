@@ -50,3 +50,10 @@ impl From<*const u8> for MemType {
         MemType::from(range)
     }
 }
+
+pub(crate) fn shuttle_yield() {
+    #[cfg(all(feature = "shuttle", test))]
+    {
+        shuttle::thread::yield_now();
+    }
+}

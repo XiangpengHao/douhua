@@ -6,15 +6,16 @@ use super::{
 };
 use crate::{
     error::AllocError,
-    utils::{poison_memory_region, unpoison_memory_region, MemType, PM_PAGE_SIZE},
+    utils::{poison_memory_region, shuttle_yield, unpoison_memory_region, MemType, PM_PAGE_SIZE},
 };
-use std::{
-    alloc::Layout,
-    sync::{
-        atomic::{AtomicPtr, Ordering},
-        Mutex,
-    },
-};
+use std::alloc::Layout;
+use std::sync::Mutex;
+
+#[cfg(all(feature = "shuttle", test))]
+use shuttle::sync::atomic::{AtomicPtr, Ordering};
+
+#[cfg(not(all(feature = "shuttle", test)))]
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 // 1GB heap size
 const HEAP_SIZE: usize = 1024 * 1024 * 1024;
@@ -143,6 +144,13 @@ impl<T: HeapManager> AllocInner<T> {
             Some(index) => {
                 let mut node = self.list_heads[index].load(Ordering::Acquire);
                 loop {
+                    // if node is locked, wait until other threads unlock it
+                    if node as usize == usize::MAX {
+                        shuttle_yield();
+                        node = self.list_heads[index].load(Ordering::Acquire);
+                        continue;
+                    }
+
                     if !node.is_null() {
                         unpoison_memory_region(node as *const u8, layout.size());
                         let new = unsafe { (*node).next.load(Ordering::Acquire) };
@@ -161,6 +169,21 @@ impl<T: HeapManager> AllocInner<T> {
                         }
                     }
 
+                    // exclusively lock the list head
+                    match self.list_heads[index].compare_exchange_weak(
+                        node,
+                        usize::MAX as *mut AtomicListNode,
+                        Ordering::Acquire,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_v) => {}
+                        Err(v) => {
+                            node = v;
+                            shuttle_yield();
+                            continue;
+                        }
+                    }
+
                     assert!(std::mem::size_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
                     assert!(std::mem::align_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
 
@@ -168,10 +191,15 @@ impl<T: HeapManager> AllocInner<T> {
                     let page_align = page_size;
                     let page_layout = Layout::from_size_align(page_size, page_align).unwrap();
 
-                    let page_mem = unsafe {
-                        let mut heap_manager = self.heap_manager.lock().unwrap();
-                        heap_manager.alloc_frame(page_layout)?
+                    let mut heap_manager = if let Ok(h) = self.heap_manager.try_lock() {
+                        h
+                    } else {
+                        shuttle_yield();
+                        node = self.list_heads[index].load(Ordering::Acquire);
+                        continue;
                     };
+
+                    let page_mem = unsafe { heap_manager.alloc_frame(page_layout) }?;
 
                     let mut node_n = AtomicListNode {
                         next: AtomicPtr::default(),
@@ -197,7 +225,7 @@ impl<T: HeapManager> AllocInner<T> {
                             .load(Ordering::Relaxed)
                     };
                     match self.list_heads[index].compare_exchange_weak(
-                        node,
+                        usize::MAX as *mut AtomicListNode,
                         new_node,
                         Ordering::Acquire,
                         Ordering::Acquire,
@@ -205,15 +233,8 @@ impl<T: HeapManager> AllocInner<T> {
                         Ok(_) => {
                             return Ok(page_mem as *mut u8);
                         }
-                        Err(v) => {
-                            node = v;
-                            unsafe {
-                                self.heap_manager
-                                    .lock()
-                                    .unwrap()
-                                    .dealloc_frame(page_mem, page_layout);
-                            }
-                            continue;
+                        Err(_v) => {
+                            unreachable!("list node is locked, no one should contend with us")
                         }
                     }
                 }
@@ -329,5 +350,117 @@ mod tests {
     fn pm_inner() {
         let alloc = AllocInner::<PMHeap>::with_capacity(PM_PAGE_SIZE);
         basic_alloc_inner(alloc);
+    }
+
+    enum Operation {
+        Alloc128,
+        Alloc256,
+        Alloc1024,
+        Dealloc,
+    }
+
+    impl Operation {
+        fn gen(rng: &mut impl Rng) -> Self {
+            match rng.gen_range(0, 4) {
+                0 => Operation::Alloc128,
+                1 => Operation::Alloc256,
+                2 => Operation::Alloc1024,
+                3 => Operation::Dealloc,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    use std::sync::Arc;
+
+    #[cfg(feature = "shuttle")]
+    use shuttle::{
+        rand::{thread_rng, Rng},
+        thread,
+    };
+
+    #[cfg(not(feature = "shuttle"))]
+    use ::{
+        rand::{thread_rng, Rng},
+        std::thread,
+    };
+
+    fn mt_basic() {
+        let alloc = AllocInner::<DRAMHeap>::with_capacity(PM_PAGE_SIZE * 3);
+        let alloc = Arc::new(alloc);
+
+        let allocated = Arc::new(crossbeam_queue::SegQueue::<(usize, usize)>::new());
+
+        let thread_cnt = 2;
+        let mut handlers = vec![];
+        for _t in 0..thread_cnt {
+            let allocated = allocated.clone();
+            let alloc = alloc.clone();
+            let h = thread::spawn(move || {
+                let mut rng = thread_rng();
+                let tid = thread::current().id();
+
+                for _i in 0..32 {
+                    let layout = match Operation::gen(&mut rng) {
+                        Operation::Alloc128 => Layout::from_size_align(128, 8).unwrap(),
+                        Operation::Alloc256 => Layout::from_size_align(256, 8).unwrap(),
+                        Operation::Alloc1024 => Layout::from_size_align(1024, 8).unwrap(),
+                        Operation::Dealloc => {
+                            if let Some((ptr, size)) = allocated.pop() {
+                                let ptr = ptr as *mut u8;
+                                for i in 0..size {
+                                    let v = unsafe { ptr.add(i).read() };
+                                    assert_eq!(v, size as u8);
+                                }
+                                alloc.dealloc_inner(ptr, Layout::from_size_align(size, 8).unwrap());
+                            }
+                            continue;
+                        }
+                    };
+                    let ptr = alloc.safe_alloc(layout).unwrap();
+                    for i in 0..layout.size() {
+                        unsafe { ptr.add(i).write(layout.size() as u8) };
+                    }
+                    allocated.push((ptr as usize, layout.size()));
+                }
+            });
+            handlers.push(h);
+        }
+        for h in handlers {
+            h.join().unwrap();
+        }
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    #[test]
+    fn mt_basic_test() {
+        mt_basic();
+    }
+
+    #[cfg(feature = "shuttle")]
+    #[test]
+    fn shuttle_mt_basic() {
+        let mut config = shuttle::Config::default();
+        config.max_steps = shuttle::MaxSteps::None;
+        let mut runner = shuttle::PortfolioRunner::new(true, config);
+        runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
+        // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
+        // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
+        // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
+        // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
+        // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
+        // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
+        // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
+
+        runner.run(mt_basic);
+    }
+
+    #[cfg(feature = "shuttle")]
+    #[test]
+    fn shuttle_replay() {
+        shuttle::replay(
+            mt_basic,
+            "910149adaab389ceb0bee9dd0180abaaeaaa5a5555abaa6a55adaaab6a550000",
+        )
     }
 }

@@ -56,9 +56,9 @@ jobs:
     - run: cargo test -- --test-threads 1
     - run: >
         env ASAN_OPTIONS="detect_odr_violation=0" RUSTFLAGS="-Z sanitizer=address" 
-        cargo test -Zbuild-std --target x86_64-unknown-linux-gnu --tests -- --test-threads 1 
+        cargo test -Zbuild-std --target x86_64-unknown-linux-gnu --features "sans" --tests -- --test-threads 1 
     - run: rm target/memory_pool/* -rf
     - run: >
         env RUSTFLAGS="-Z sanitizer=memory" 
-        cargo test -Zbuild-std --target x86_64-unknown-linux-gnu --tests -- --test-threads 1
+        cargo test -Zbuild-std --target x86_64-unknown-linux-gnu --features "sans" --tests -- --test-threads 1
  

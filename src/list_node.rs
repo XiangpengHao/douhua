@@ -1,4 +1,10 @@
-use std::{mem::MaybeUninit, sync::atomic::AtomicPtr};
+use std::mem::MaybeUninit;
+
+#[cfg(not(all(feature = "shuttle", test)))]
+use std::sync::atomic::AtomicPtr;
+
+#[cfg(all(feature = "shuttle", test))]
+use shuttle::sync::atomic::AtomicPtr;
 
 #[derive(Debug)]
 pub(crate) struct AtomicListNode {
