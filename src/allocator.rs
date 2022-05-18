@@ -1,4 +1,5 @@
 use once_cell::sync::Lazy;
+use rand::Rng;
 
 use super::{
     heap::{DRAMHeap, HeapManager, PMHeap},
@@ -156,15 +157,17 @@ impl<T: HeapManager> AllocInner<T> {
                     }
 
                     if !node.is_null() {
-                        unpoison_memory_region(node as *const u8, layout.size());
-                        let new = unsafe { (*node).next.load(Ordering::Acquire) };
+                        let clean_node =
+                            ((node as usize) & 0x0000_ffff_ffff_ffff) as *mut AtomicListNode; // untag the pointer
+                        unpoison_memory_region(clean_node as *const u8, layout.size());
+                        let new = unsafe { (*clean_node).next.load(Ordering::Acquire) };
                         match self.list_heads[index].compare_exchange_weak(
                             node,
                             new,
                             Ordering::Acquire,
                             Ordering::Acquire,
                         ) {
-                            Ok(_) => return Ok(node as *mut AtomicListNode as *mut u8),
+                            Ok(_) => return Ok(clean_node as *mut AtomicListNode as *mut u8),
                             Err(v) => {
                                 node = v;
                                 poison_memory_region(node as *const u8, layout.size());
@@ -204,7 +207,13 @@ impl<T: HeapManager> AllocInner<T> {
                         continue;
                     };
 
-                    let page_mem = unsafe { heap_manager.alloc_frame(page_layout) }?;
+                    let page_mem = match unsafe { heap_manager.alloc_frame(page_layout) } {
+                        Ok(v) => v,
+                        Err(v) => {
+                            self.list_heads[index].store(node, Ordering::Release);
+                            return Err(v);
+                        }
+                    };
 
                     let mut node_n = AtomicListNode {
                         next: AtomicPtr::default(),
@@ -261,14 +270,29 @@ impl<T: HeapManager> AllocInner<T> {
         match list_index(&layout) {
             Some(index) => {
                 let mut next = self.list_heads[index].load(Ordering::Acquire);
+                let backoff = Backoff::new();
                 loop {
+                    if next as usize == usize::MAX {
+                        // list head is locked, wait until other threads unlock it
+                        backoff.spin();
+                        next = self.list_heads[index].load(Ordering::Acquire);
+                        continue;
+                    }
+
                     let new_node = AtomicListNode {
                         next: AtomicPtr::new(next),
                     };
+
+                    // Tag the pointer to prevent ABA problem
+                    // TODO: maybe random number is too expensive, any simpler ways?
+                    let tag: u8 = rand::thread_rng().gen_range(0, 255);
+                    let tag = (tag as usize) << 56;
+
                     debug_assert!(std::mem::size_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
                     debug_assert!(std::mem::align_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
                     let new_node_ptr = AtomicListNode::from_u8_ptr_unchecked(ptr);
                     unsafe { new_node_ptr.write(new_node) };
+                    let new_node_ptr = (new_node_ptr as usize | tag) as *mut AtomicListNode;
                     match self.list_heads[index].compare_exchange_weak(
                         next,
                         new_node_ptr,
@@ -394,8 +418,22 @@ mod tests {
         std::thread,
     };
 
+    thread_local! {
+        static THREAD_HEAP_START: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    }
+
     fn mt_basic(heap_addr: &std::sync::atomic::AtomicUsize) {
-        let addr = heap_addr.fetch_add(1024 * 1024 * 1024, std::sync::atomic::Ordering::SeqCst);
+        let addr = THREAD_HEAP_START.with(|v| {
+            let addr = v.load(std::sync::atomic::Ordering::Relaxed);
+            if addr == 0 {
+                let addr =
+                    heap_addr.fetch_add(1024 * 1024 * 1024, std::sync::atomic::Ordering::SeqCst);
+                v.store(addr, std::sync::atomic::Ordering::Relaxed);
+                addr
+            } else {
+                addr
+            }
+        });
         let alloc = AllocInner::<DRAMHeap>::with_capacity(PM_PAGE_SIZE * 3, addr as *mut u8);
         let alloc = Arc::new(alloc);
 
@@ -408,6 +446,8 @@ mod tests {
             let alloc = alloc.clone();
             let h = thread::spawn(move || {
                 let mut rng = thread_rng();
+
+                let _tid = thread::current().id();
 
                 for _i in 0..16 {
                     let layout = match Operation::gen(&mut rng) {
@@ -450,15 +490,15 @@ mod tests {
     #[cfg(feature = "shuttle")]
     #[test]
     fn shuttle_mt_basic() {
-        let mut config = shuttle::Config::default();
+        let config = shuttle::Config::default();
         let mut runner = shuttle::PortfolioRunner::new(true, config);
-        // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
-        // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
-        // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
-        // runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
-        // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
-        // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
-        // runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
+        runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
+        runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
+        runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
+        runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
+        runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
+        runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
+        runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
         runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
 
         let heap_addr = std::sync::atomic::AtomicUsize::new(MemAddrRange::DRAM as usize);
@@ -474,7 +514,7 @@ mod tests {
         let heap_addr = std::sync::atomic::AtomicUsize::new(MemAddrRange::DRAM as usize);
         shuttle::replay(
             move || mt_basic(&heap_addr),
-            "91028a018b9ec5a6d08dddab4dd0033c454a22254992444a244f4ae412498a4c51148b525212f5224b144551142592e2259112258abaf822450100000000000000",
+            "910283019e879a8cd8b2fc86b80100f8532729521445164551e28b244531258ad292f4e7a4444aa448bd248a8b9448511245494b92480a000000000000000000",
         )
     }
 }

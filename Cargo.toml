@@ -10,11 +10,11 @@ crossbeam-utils = "0.8.8"
 libc = "0.2.123"
 once_cell = "1.10.0"
 thiserror = "1.0.30"
+rand = "0.7.3"
 
 [dev-dependencies]
 crossbeam-queue = "0.3.5"
 shuttle = { path = "../shuttle" }
-rand = "0.7.3"
 
 [features]
 sans = []
