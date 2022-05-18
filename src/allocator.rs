@@ -439,7 +439,7 @@ mod tests {
 
         let allocated = Arc::new(crossbeam_queue::SegQueue::<(usize, usize)>::new());
 
-        let thread_cnt = 2;
+        let thread_cnt = 3;
         let mut handlers = vec![];
         for _t in 0..thread_cnt {
             let allocated = allocated.clone();
