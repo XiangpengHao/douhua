@@ -65,32 +65,22 @@ pub struct Allocator {
 static ALLOCATOR: once_cell::sync::OnceCell<Allocator> = OnceCell::new();
 impl Allocator {
     pub fn get() -> &'static Allocator {
-        ALLOCATOR.get().expect("The allocator is not initialized")
-        // let rv = ALLOCATOR.get_or_init(|| {
-        //     let size = 128 * GB;
-        //     Allocator {
-        //         dram: AllocInner::<DRAMHeap>::with_capacity(
-        //             size,
-        //             MemAddrRange::DRAM as usize as *mut u8,
-        //         ),
-        //         pm: AllocInner::<PMHeap>::with_capacity(size, MemAddrRange::PM as usize as *mut u8),
-        //     }
-        // });
-        // rv
-    }
+        let rv = ALLOCATOR.get_or_init(|| {
+            let size_gb = std::env::var("DOUHUA_HEAP_GB")
+                .unwrap_or_else(|_| "1".to_string())
+                .parse::<usize>()
+                .expect("DOUHUA_HEAP_GB must be a number");
 
-    /// # Safety
-    /// Dangerous because it resets the allocator
-    /// We should eventually deprecate this function
-    pub unsafe fn initialize(max_cap_gb: usize) {
-        let size = max_cap_gb * GB;
-        let _rv = ALLOCATOR.get_or_init(|| Allocator {
-            dram: AllocInner::<DRAMHeap>::with_capacity(
-                size,
-                MemAddrRange::DRAM as usize as *mut u8,
-            ),
-            pm: AllocInner::<PMHeap>::with_capacity(size, MemAddrRange::PM as usize as *mut u8),
+            let size = size_gb * GB;
+            Allocator {
+                dram: AllocInner::<DRAMHeap>::with_capacity(
+                    size,
+                    MemAddrRange::DRAM as usize as *mut u8,
+                ),
+                pm: AllocInner::<PMHeap>::with_capacity(size, MemAddrRange::PM as usize as *mut u8),
+            }
         });
+        rv
     }
 
     /// # Safety
