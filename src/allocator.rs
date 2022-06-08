@@ -65,7 +65,7 @@ pub struct Allocator {
 static ALLOCATOR: once_cell::sync::OnceCell<Allocator> = OnceCell::new();
 impl Allocator {
     pub fn get() -> &'static Allocator {
-        let rv = ALLOCATOR.get_or_init(|| {
+        ALLOCATOR.get_or_init(|| {
             let size_gb = std::env::var("DOUHUA_HEAP_GB")
                 .unwrap_or_else(|_| "1".to_string())
                 .parse::<usize>()
@@ -79,8 +79,7 @@ impl Allocator {
                 ),
                 pm: AllocInner::<PMHeap>::with_capacity(size, MemAddrRange::PM as usize as *mut u8),
             }
-        });
-        rv
+        })
     }
 
     /// # Safety
