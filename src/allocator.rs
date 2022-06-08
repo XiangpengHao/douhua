@@ -1,4 +1,4 @@
-use once_cell::sync::Lazy;
+use once_cell::sync::OnceCell;
 use rand::Rng;
 
 use super::{
@@ -22,7 +22,7 @@ use shuttle::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 // 1GB heap size
-const HEAP_SIZE: usize = 1024 * 1024 * 1024;
+const GB: usize = 1024 * 1024 * 1024;
 
 /// Block size to use
 ///
@@ -62,13 +62,35 @@ pub struct Allocator {
     pm: AllocInner<PMHeap>,
 }
 
+static ALLOCATOR: once_cell::sync::OnceCell<Allocator> = OnceCell::new();
 impl Allocator {
     pub fn get() -> &'static Allocator {
-        static ALLOCATOR: Lazy<Allocator> = Lazy::new(|| Allocator {
-            dram: AllocInner::<DRAMHeap>::new(),
-            pm: AllocInner::<PMHeap>::new(),
+        ALLOCATOR.get().expect("The allocator is not initialized")
+        // let rv = ALLOCATOR.get_or_init(|| {
+        //     let size = 128 * GB;
+        //     Allocator {
+        //         dram: AllocInner::<DRAMHeap>::with_capacity(
+        //             size,
+        //             MemAddrRange::DRAM as usize as *mut u8,
+        //         ),
+        //         pm: AllocInner::<PMHeap>::with_capacity(size, MemAddrRange::PM as usize as *mut u8),
+        //     }
+        // });
+        // rv
+    }
+
+    /// # Safety
+    /// Dangerous because it resets the allocator
+    /// We should eventually deprecate this function
+    pub unsafe fn initialize(max_cap_gb: usize) {
+        let size = max_cap_gb * GB;
+        let _rv = ALLOCATOR.get_or_init(|| Allocator {
+            dram: AllocInner::<DRAMHeap>::with_capacity(
+                size,
+                MemAddrRange::DRAM as usize as *mut u8,
+            ),
+            pm: AllocInner::<PMHeap>::with_capacity(size, MemAddrRange::PM as usize as *mut u8),
         });
-        &ALLOCATOR
     }
 
     /// # Safety
@@ -113,10 +135,6 @@ pub(crate) struct AllocInner<T: HeapManager> {
 }
 
 impl AllocInner<DRAMHeap> {
-    pub(crate) fn new() -> Self {
-        Self::with_capacity(HEAP_SIZE, MemAddrRange::DRAM as usize as *mut u8)
-    }
-
     pub(crate) fn with_capacity(cap: usize, heap_start_addr: *mut u8) -> Self {
         AllocInner {
             list_heads: Default::default(),
@@ -126,10 +144,6 @@ impl AllocInner<DRAMHeap> {
 }
 
 impl AllocInner<PMHeap> {
-    pub(crate) fn new() -> Self {
-        Self::with_capacity(HEAP_SIZE, MemAddrRange::PM as usize as *mut u8)
-    }
-
     pub(crate) fn with_capacity(cap: usize, heap_start_addr: *mut u8) -> Self {
         assert!(cap >= PM_PAGE_SIZE);
 

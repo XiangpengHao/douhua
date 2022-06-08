@@ -6,6 +6,9 @@ const PM_PAGE_SIZE: usize = 1024 * 1024 * 2;
 
 #[test]
 fn basic() {
+    unsafe {
+        Allocator::initialize(1);
+    }
     let alloc_layout = Layout::from_size_align(64, 64).unwrap();
     let max_cnt = PM_PAGE_SIZE / alloc_layout.size();
 

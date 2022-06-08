@@ -48,12 +48,11 @@ impl From<*const u8> for MemAddrRange {
     }
 }
 
-/// This struct manages all the small memory allocation,
-/// manages the materialized memory heap
+/// This struct manages all the small memory allocation (2MB pages)
 struct InnerHeap {
     heap_start: *mut u8,
     heap_size: usize,
-    head: ListNode,
+    free_list: ListNode,
     high_addr: *mut u8,
 }
 
@@ -71,13 +70,14 @@ impl InnerHeap {
         unsafe { self.heap_start.add(self.heap_size) }
     }
 
+    /// Add a 2MB page to the temporary free list
     fn add_free_page(&mut self, addr: *mut u8) {
         let mut node = ListNode::new();
-        node.next = self.head.next.take();
+        node.next = self.free_list.next.take();
 
         let node_ptr = ListNode::from_u8_ptr_unchecked(addr);
         unsafe { node_ptr.write(node) };
-        self.head.next = Some(unsafe { &mut *node_ptr });
+        self.free_list.next = Some(unsafe { &mut *node_ptr });
     }
 }
 
@@ -113,7 +113,7 @@ impl HeapManager for PMHeap {
             inner_heap: InnerHeap {
                 heap_size,
                 high_addr: heap_start_addr,
-                head: ListNode::new(),
+                free_list: ListNode::new(),
                 heap_start: heap_start_addr,
             },
             virtual_high_addr: heap_start_addr,
@@ -153,8 +153,8 @@ impl HeapManager for PMHeap {
 impl PMHeap {
     /// Allocate pages from heap
     fn alloc_small(&mut self, _layout: Layout) -> Result<*mut u8, AllocError> {
-        if let Some(head_next) = self.inner_heap.head.next.take() {
-            self.inner_heap.head.next = head_next.next.take();
+        if let Some(head_next) = self.inner_heap.free_list.next.take() {
+            self.inner_heap.free_list.next = head_next.next.take();
             Ok(head_next.start_address() as *mut u8)
         } else {
             self.inner_heap.expand_free_page()
@@ -235,7 +235,7 @@ impl HeapManager for DRAMHeap {
             heap_size,
             heap_start: heap_start_addr,
             high_addr: heap_start_addr,
-            head: ListNode::new(),
+            free_list: ListNode::new(),
         };
         DRAMHeap {
             inner_heap,
@@ -298,8 +298,8 @@ impl DRAMHeap {
 
     /// Allocate pages from heap
     fn alloc_small(&mut self, _layout: Layout) -> Result<*mut u8, AllocError> {
-        if let Some(head_next) = self.inner_heap.head.next.take() {
-            self.inner_heap.head.next = head_next.next.take();
+        if let Some(head_next) = self.inner_heap.free_list.next.take() {
+            self.inner_heap.free_list.next = head_next.next.take();
             Ok(head_next.start_address() as *mut u8)
         } else {
             self.inner_heap.expand_free_page()
