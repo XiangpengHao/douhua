@@ -2,7 +2,7 @@ use crate::{
     error::AllocError,
     utils::{
         mmap::{create_and_map_pool, map_dram_builder, unmap_memory},
-        MemType, PM_PAGE_SIZE,
+        MemType, PAGE_SIZE,
     },
 };
 
@@ -62,7 +62,7 @@ impl InnerHeap {
         if page_start as *const u8 == self.heap_end() {
             return Err(AllocError::OutOfMemory);
         }
-        self.high_addr = unsafe { self.high_addr.add(PM_PAGE_SIZE) };
+        self.high_addr = unsafe { self.high_addr.add(PAGE_SIZE) };
         Ok(page_start as *mut u8)
     }
 
@@ -82,7 +82,7 @@ impl InnerHeap {
 }
 
 pub(crate) trait HeapManager: Send + Sync {
-    fn new(heap_size: usize, heap_start_addr: *mut u8) -> Self;
+    fn new(heap_start_addr: *mut u8) -> Self;
 
     /// # Safety
     /// Allocates frame using mmap is unsafe
@@ -105,13 +105,15 @@ pub struct PMHeap {
 unsafe impl Send for PMHeap {}
 unsafe impl Sync for PMHeap {}
 
+const PM_DEFAULT_ALLOC_SIZE: usize = 1024 * 1024 * 1024 * 2; // 2GB
+
 impl HeapManager for PMHeap {
-    fn new(heap_size: usize, heap_start_addr: *mut u8) -> Self {
+    fn new(heap_start_addr: *mut u8) -> Self {
         // let virtual_high_addr = MemAddrRange::from(MemType::PM) as usize as *mut u8;
 
         let mut manager = PMHeap {
             inner_heap: InnerHeap {
-                heap_size,
+                heap_size: 0,
                 high_addr: heap_start_addr,
                 free_list: ListNode::new(),
                 heap_start: heap_start_addr,
@@ -121,24 +123,28 @@ impl HeapManager for PMHeap {
         };
 
         // init the frame
-        let layout = Layout::from_size_align(heap_size, PM_PAGE_SIZE).unwrap();
-        manager.alloc_large(layout).unwrap();
+        let layout = Layout::from_size_align(PM_DEFAULT_ALLOC_SIZE, PAGE_SIZE).unwrap();
+        manager.expand_heap(layout).unwrap();
 
         manager
     }
 
     unsafe fn alloc_frame(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
         let size = layout.size();
-        if size <= PM_PAGE_SIZE {
-            self.alloc_small(layout)
+        if size <= PAGE_SIZE {
+            assert_eq!(size, PAGE_SIZE);
+            self.alloc_page(layout)
         } else {
-            self.alloc_large(layout)
+            let base_str =
+                std::env::var("POOL_DIR").unwrap_or_else(|_| "target/memory_pool".to_string());
+            let rv = self.alloc_large_from(layout, &base_str)?;
+            Ok(rv.0)
         }
     }
 
     unsafe fn dealloc_frame(&mut self, ptr: *mut u8, layout: Layout) {
         let size = layout.size();
-        if size <= PM_PAGE_SIZE {
+        if size <= PAGE_SIZE {
             self.inner_heap.add_free_page(ptr);
         } else {
             self.dealloc_large(ptr, layout);
@@ -152,21 +158,31 @@ impl HeapManager for PMHeap {
 
 impl PMHeap {
     /// Allocate pages from heap
-    fn alloc_small(&mut self, _layout: Layout) -> Result<*mut u8, AllocError> {
+    fn alloc_page(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
         if let Some(head_next) = self.inner_heap.free_list.next.take() {
             self.inner_heap.free_list.next = head_next.next.take();
             Ok(head_next.start_address() as *mut u8)
         } else {
-            self.inner_heap.expand_free_page()
+            let rv = self.inner_heap.expand_free_page();
+            match rv {
+                Ok(v) => Ok(v),
+                Err(v) => {
+                    assert!(matches!(v, AllocError::OutOfMemory));
+                    let large_layout =
+                        Layout::from_size_align(PM_DEFAULT_ALLOC_SIZE, PAGE_SIZE).unwrap();
+                    self.expand_heap(large_layout).unwrap();
+                    self.alloc_page(layout)
+                }
+            }
         }
     }
 
-    pub fn alloc_large_from(
+    fn alloc_large_from(
         &mut self,
         layout: Layout,
         pool_dir: &str,
-    ) -> Result<*mut u8, AllocError> {
-        let aligned_size = align_up(layout.size(), PM_PAGE_SIZE);
+    ) -> Result<(*mut u8, usize), AllocError> {
+        let aligned_size = align_up(layout.size(), PAGE_SIZE);
 
         std::fs::create_dir_all(pool_dir).unwrap();
 
@@ -182,13 +198,16 @@ impl PMHeap {
         let addr = create_and_map_pool(&pool_path, aligned_size, Some(next_addr))
             .map_err(|_e| AllocError::MmapFail)?;
         self.files.insert(addr, pool_path);
-        Ok(addr)
+
+        Ok((addr, aligned_size))
     }
 
-    fn alloc_large(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
+    fn expand_heap(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
         let base_str =
             std::env::var("POOL_DIR").unwrap_or_else(|_| "target/memory_pool".to_string());
-        self.alloc_large_from(layout, &base_str)
+        let rv = self.alloc_large_from(layout, &base_str)?;
+        self.inner_heap.heap_size += rv.1;
+        Ok(rv.0)
     }
 
     fn dealloc_large(&mut self, ptr: *mut u8, layout: Layout) {
@@ -200,7 +219,7 @@ impl PMHeap {
 
         self.files.remove(&ptr);
 
-        let aligned_size = align_up(layout.size(), PM_PAGE_SIZE);
+        let aligned_size = align_up(layout.size(), PAGE_SIZE);
 
         unsafe {
             unmap_memory(ptr, aligned_size);
@@ -226,20 +245,23 @@ pub struct DRAMHeap {
 unsafe impl Send for DRAMHeap {}
 unsafe impl Sync for DRAMHeap {}
 
+const DRAM_DEFAULT_ALLOC_SIZE: usize = 1024 * 1024 * 1024 * 2; // 2GB
 impl HeapManager for DRAMHeap {
-    fn new(heap_size: usize, heap_start_addr: *mut u8) -> Self {
+    fn new(heap_start_addr: *mut u8) -> Self {
         let heap_start_addr =
-            DRAMHeap::map_dram_pool(heap_size, Some(heap_start_addr as *const u8))
+            DRAMHeap::map_dram_pool(DRAM_DEFAULT_ALLOC_SIZE, Some(heap_start_addr as *const u8))
                 .expect("failed to create DRAM heap pool!");
+
         let inner_heap = InnerHeap {
-            heap_size,
+            heap_size: DRAM_DEFAULT_ALLOC_SIZE,
             heap_start: heap_start_addr,
             high_addr: heap_start_addr,
             free_list: ListNode::new(),
         };
+
         DRAMHeap {
             inner_heap,
-            virtual_high_addr: unsafe { heap_start_addr.add(heap_size) },
+            virtual_high_addr: unsafe { heap_start_addr.add(DRAM_DEFAULT_ALLOC_SIZE) },
         }
     }
 
@@ -247,8 +269,8 @@ impl HeapManager for DRAMHeap {
     /// unsafe because the layout can be anything
     unsafe fn alloc_frame(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
         let size = layout.size();
-        if size <= PM_PAGE_SIZE {
-            self.alloc_small(layout)
+        if size <= PAGE_SIZE {
+            self.alloc_page(layout)
         } else {
             self.alloc_large(layout)
         }
@@ -261,7 +283,7 @@ impl HeapManager for DRAMHeap {
         debug_assert!(std::mem::align_of::<ListNode>() <= layout.align());
 
         let size = layout.size();
-        if size <= PM_PAGE_SIZE {
+        if size <= PAGE_SIZE {
             self.inner_heap.add_free_page(ptr)
         } else {
             self.dealloc_large(ptr, layout)
@@ -276,7 +298,7 @@ impl HeapManager for DRAMHeap {
 impl DRAMHeap {
     /// Create a new memory mapping for huge memory (> 2MB)
     fn alloc_large(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
-        let aligned_size = align_up(layout.size(), PM_PAGE_SIZE);
+        let aligned_size = align_up(layout.size(), PAGE_SIZE);
         let next_addr = self.virtual_high_addr;
         self.virtual_high_addr = unsafe { self.virtual_high_addr.add(aligned_size) };
         DRAMHeap::map_dram_pool(aligned_size, Some(next_addr))
@@ -289,7 +311,7 @@ impl DRAMHeap {
     }
 
     fn dealloc_large(&mut self, ptr: *mut u8, layout: Layout) {
-        let aligned_size = align_up(layout.size(), PM_PAGE_SIZE);
+        let aligned_size = align_up(layout.size(), PAGE_SIZE);
 
         unsafe {
             unmap_memory(ptr, aligned_size);
@@ -297,12 +319,22 @@ impl DRAMHeap {
     }
 
     /// Allocate pages from heap
-    fn alloc_small(&mut self, _layout: Layout) -> Result<*mut u8, AllocError> {
+    fn alloc_page(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
         if let Some(head_next) = self.inner_heap.free_list.next.take() {
             self.inner_heap.free_list.next = head_next.next.take();
             Ok(head_next.start_address() as *mut u8)
         } else {
-            self.inner_heap.expand_free_page()
+            match self.inner_heap.expand_free_page() {
+                Ok(addr) => Ok(addr),
+                Err(e) => {
+                    assert!(matches!(e, AllocError::OutOfMemory));
+                    self.alloc_large(
+                        Layout::from_size_align(DRAM_DEFAULT_ALLOC_SIZE, PAGE_SIZE).unwrap(),
+                    )?;
+                    self.inner_heap.heap_size += DRAM_DEFAULT_ALLOC_SIZE;
+                    self.alloc_page(layout)
+                }
+            }
         }
     }
 }
@@ -316,33 +348,25 @@ fn align_up(size: usize, align: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::PM_PAGE_SIZE;
+    use crate::utils::PAGE_SIZE;
 
     use super::*;
     use std::alloc::Layout;
 
     fn basic_heap_alloc<H: HeapManager>(mem_type: MemType) {
         let page_cnt = 16;
-        let mut heap = H::new(
-            PM_PAGE_SIZE * page_cnt,
-            MemAddrRange::from(mem_type) as usize as *mut u8,
-        );
+        let mut heap = H::new(MemAddrRange::from(mem_type) as usize as *mut u8);
         let addr_range = H::mem_addr_range();
 
-        let page_layout = Layout::from_size_align(PM_PAGE_SIZE, PM_PAGE_SIZE).unwrap();
+        let page_layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
 
         // allocate all pages
         let mut allocated = vec![];
         for _i in 0..page_cnt {
             let ptr = unsafe { heap.alloc_frame(page_layout).unwrap() };
-            assert_eq!(ptr as usize % PM_PAGE_SIZE, 0);
+            assert_eq!(ptr as usize % PAGE_SIZE, 0);
             assert_eq!(ptr as usize & addr_range as usize, addr_range as usize);
             allocated.push(ptr);
-        }
-
-        // can't allocate more
-        unsafe {
-            assert!(heap.alloc_frame(page_layout).is_err());
         }
 
         // deallocate them
@@ -356,7 +380,7 @@ mod tests {
         let mut allocated = vec![];
         for _i in 0..page_cnt {
             let ptr = unsafe { heap.alloc_frame(page_layout).unwrap() };
-            assert_eq!(ptr as usize % PM_PAGE_SIZE, 0);
+            assert_eq!(ptr as usize % PAGE_SIZE, 0);
             allocated.push(ptr);
         }
     }

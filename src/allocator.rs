@@ -8,9 +8,7 @@ use super::{
 use crate::{
     error::AllocError,
     heap::MemAddrRange,
-    utils::{
-        backoff::Backoff, poison_memory_region, unpoison_memory_region, MemType, PM_PAGE_SIZE,
-    },
+    utils::{backoff::Backoff, poison_memory_region, unpoison_memory_region, MemType, PAGE_SIZE},
 };
 use std::alloc::Layout;
 use std::sync::Mutex;
@@ -20,9 +18,6 @@ use shuttle::sync::atomic::{AtomicPtr, Ordering};
 
 #[cfg(not(all(feature = "shuttle", test)))]
 use std::sync::atomic::{AtomicPtr, Ordering};
-
-// 1GB heap size
-const GB: usize = 1024 * 1024 * 1024;
 
 /// Block size to use
 ///
@@ -65,20 +60,9 @@ pub struct Allocator {
 static ALLOCATOR: once_cell::sync::OnceCell<Allocator> = OnceCell::new();
 impl Allocator {
     pub fn get() -> &'static Allocator {
-        ALLOCATOR.get_or_init(|| {
-            let size_gb = std::env::var("DOUHUA_HEAP_GB")
-                .unwrap_or_else(|_| "1".to_string())
-                .parse::<usize>()
-                .expect("DOUHUA_HEAP_GB must be a number");
-
-            let size = size_gb * GB;
-            Allocator {
-                dram: AllocInner::<DRAMHeap>::with_capacity(
-                    size,
-                    MemAddrRange::DRAM as usize as *mut u8,
-                ),
-                pm: AllocInner::<PMHeap>::with_capacity(size, MemAddrRange::PM as usize as *mut u8),
-            }
+        ALLOCATOR.get_or_init(|| Allocator {
+            dram: AllocInner::<DRAMHeap>::with_capacity(MemAddrRange::DRAM as usize as *mut u8),
+            pm: AllocInner::<PMHeap>::with_capacity(MemAddrRange::PM as usize as *mut u8),
         })
     }
 
@@ -124,21 +108,19 @@ pub(crate) struct AllocInner<T: HeapManager> {
 }
 
 impl AllocInner<DRAMHeap> {
-    pub(crate) fn with_capacity(cap: usize, heap_start_addr: *mut u8) -> Self {
+    pub(crate) fn with_capacity(heap_start_addr: *mut u8) -> Self {
         AllocInner {
             list_heads: Default::default(),
-            heap_manager: Mutex::new(DRAMHeap::new(cap, heap_start_addr)),
+            heap_manager: Mutex::new(DRAMHeap::new(heap_start_addr)),
         }
     }
 }
 
 impl AllocInner<PMHeap> {
-    pub(crate) fn with_capacity(cap: usize, heap_start_addr: *mut u8) -> Self {
-        assert!(cap >= PM_PAGE_SIZE);
-
+    pub(crate) fn with_capacity(heap_start_addr: *mut u8) -> Self {
         AllocInner {
             list_heads: Default::default(),
-            heap_manager: Mutex::new(PMHeap::new(cap, heap_start_addr)),
+            heap_manager: Mutex::new(PMHeap::new(heap_start_addr)),
         }
     }
 }
@@ -198,7 +180,7 @@ impl<T: HeapManager> AllocInner<T> {
                     assert!(std::mem::size_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
                     assert!(std::mem::align_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
 
-                    let page_size = PM_PAGE_SIZE;
+                    let page_size = PAGE_SIZE;
                     let page_align = page_size;
                     let page_layout = Layout::from_size_align(page_size, page_align).unwrap();
 
@@ -223,7 +205,7 @@ impl<T: HeapManager> AllocInner<T> {
                     };
                     let block_size = BLOCK_SIZES[index];
 
-                    for offset in (0..PM_PAGE_SIZE).step_by(block_size).rev() {
+                    for offset in (0..PAGE_SIZE).step_by(block_size).rev() {
                         unsafe {
                             let node_ptr =
                                 AtomicListNode::from_u8_ptr_unchecked(page_mem.add(offset));
@@ -257,7 +239,7 @@ impl<T: HeapManager> AllocInner<T> {
                 }
             }
             None => {
-                debug_assert!(layout.size() > PM_PAGE_SIZE);
+                debug_assert!(layout.size() > PAGE_SIZE);
                 let mut heap_manager = self.heap_manager.lock().unwrap();
                 unsafe { heap_manager.alloc_frame(layout) }
             }
@@ -329,13 +311,13 @@ mod tests {
     use super::AllocInner;
     use crate::{
         heap::{DRAMHeap, HeapManager, MemAddrRange, PMHeap},
-        utils::PM_PAGE_SIZE,
+        utils::PAGE_SIZE,
     };
     use std::alloc::Layout;
 
     fn basic_alloc_inner<H: HeapManager>(alloc: AllocInner<H>) {
         let alloc_layout = Layout::from_size_align(64, 64).unwrap();
-        let max_cnt = PM_PAGE_SIZE / alloc_layout.size();
+        let max_cnt = PAGE_SIZE / alloc_layout.size();
 
         let mut allocated = vec![];
 
@@ -349,9 +331,6 @@ mod tests {
             }
             allocated.push(ptr);
         }
-
-        // now we cannot allocate any more
-        assert!(alloc.safe_alloc(alloc_layout).is_err());
 
         // check sanity and dealloc them
         for (i, ptr) in allocated.into_iter().enumerate() {
@@ -374,17 +353,13 @@ mod tests {
 
     #[test]
     fn dram_inner() {
-        let alloc = AllocInner::<DRAMHeap>::with_capacity(
-            PM_PAGE_SIZE,
-            MemAddrRange::DRAM as usize as *mut u8,
-        );
+        let alloc = AllocInner::<DRAMHeap>::with_capacity(MemAddrRange::DRAM as usize as *mut u8);
         basic_alloc_inner(alloc);
     }
 
     #[test]
     fn pm_inner() {
-        let alloc =
-            AllocInner::<PMHeap>::with_capacity(PM_PAGE_SIZE, MemAddrRange::PM as usize as *mut u8);
+        let alloc = AllocInner::<PMHeap>::with_capacity(MemAddrRange::PM as usize as *mut u8);
         basic_alloc_inner(alloc);
     }
 
@@ -437,7 +412,7 @@ mod tests {
                 addr
             }
         });
-        let alloc = AllocInner::<DRAMHeap>::with_capacity(PM_PAGE_SIZE * 3, addr as *mut u8);
+        let alloc = AllocInner::<DRAMHeap>::with_capacity(addr as *mut u8);
         let alloc = Arc::new(alloc);
 
         let allocated = Arc::new(crossbeam_queue::SegQueue::<(usize, usize)>::new());

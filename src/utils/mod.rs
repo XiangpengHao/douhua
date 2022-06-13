@@ -1,7 +1,7 @@
 pub(crate) mod backoff;
 pub(crate) mod mmap;
 
-pub(crate) const PM_PAGE_SIZE: usize = 2 * 1024 * 1024; // 2MB
+pub(crate) const PAGE_SIZE: usize = 2 * 1024 * 1024; // 2MB
 
 use crate::heap::MemAddrRange;
 
