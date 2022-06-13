@@ -404,8 +404,8 @@ mod tests {
         let addr = THREAD_HEAP_START.with(|v| {
             let addr = v.load(std::sync::atomic::Ordering::Relaxed);
             if addr == 0 {
-                let addr =
-                    heap_addr.fetch_add(1024 * 1024 * 1024, std::sync::atomic::Ordering::SeqCst);
+                let addr = heap_addr
+                    .fetch_add(1024 * 1024 * 1024 * 8, std::sync::atomic::Ordering::SeqCst);
                 v.store(addr, std::sync::atomic::Ordering::Relaxed);
                 addr
             } else {
