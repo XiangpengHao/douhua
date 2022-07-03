@@ -105,7 +105,7 @@ pub struct PMHeap {
 unsafe impl Send for PMHeap {}
 unsafe impl Sync for PMHeap {}
 
-const PM_DEFAULT_ALLOC_SIZE: usize = 1024 * 1024 * 1024 * 4; // 2GB
+const PM_DEFAULT_ALLOC_SIZE: usize = 1024 * 1024 * 1024 * 16; // 2GB
 
 impl HeapManager for PMHeap {
     fn new(heap_start_addr: *mut u8) -> Self {
