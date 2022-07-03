@@ -57,7 +57,7 @@ pub struct Allocator {
 }
 
 #[cfg(feature = "shard-6")]
-const SHARD_NUM: usize = 16;
+const SHARD_NUM: usize = 32;
 
 #[cfg(not(feature = "shard-6"))]
 const SHARD_NUM: usize = 1;
@@ -67,7 +67,7 @@ static ALLOCATOR: once_cell::sync::OnceCell<[Allocator; SHARD_NUM]> = OnceCell::
 impl Allocator {
     pub fn get() -> &'static Allocator {
         let allocator = ALLOCATOR.get_or_init(|| {
-            let mem_each_shard = 1024 * 1024 * 1024 * 64; // 128 GB
+            let mem_each_shard = 1024 * 1024 * 1024 * 32; // 128 GB
 
             let mut allocators: [std::mem::MaybeUninit<Allocator>; SHARD_NUM] =
                 unsafe { std::mem::MaybeUninit::uninit().assume_init() };
