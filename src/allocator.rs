@@ -1,6 +1,3 @@
-use once_cell::sync::OnceCell;
-use rand::Rng;
-
 use super::{
     heap::{DRAMHeap, HeapManager, PMHeap},
     list_node::AtomicListNode,
@@ -10,6 +7,8 @@ use crate::{
     heap::MemAddrRange,
     utils::{backoff::Backoff, poison_memory_region, unpoison_memory_region, MemType, PAGE_SIZE},
 };
+use nanorand::Rng;
+use once_cell::sync::OnceCell;
 use std::alloc::Layout;
 use std::sync::Mutex;
 
@@ -57,13 +56,49 @@ pub struct Allocator {
     pm: AllocInner<PMHeap>,
 }
 
-static ALLOCATOR: once_cell::sync::OnceCell<Allocator> = OnceCell::new();
+#[cfg(feature = "shard-6")]
+const SHARD_NUM: usize = 6;
+
+#[cfg(not(feature = "shard-6"))]
+const SHARD_NUM: usize = 1;
+
+static ALLOCATOR: once_cell::sync::OnceCell<[Allocator; SHARD_NUM]> = OnceCell::new();
+
 impl Allocator {
     pub fn get() -> &'static Allocator {
-        ALLOCATOR.get_or_init(|| Allocator {
-            dram: AllocInner::<DRAMHeap>::with_capacity(MemAddrRange::DRAM as usize as *mut u8),
-            pm: AllocInner::<PMHeap>::with_capacity(MemAddrRange::PM as usize as *mut u8),
-        })
+        let allocator = ALLOCATOR.get_or_init(|| {
+            let mem_each_shard = 1024 * 1024 * 1024 * 128; // 128 GB
+
+            let mut allocators: [std::mem::MaybeUninit<Allocator>; SHARD_NUM] =
+                unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+
+            for (i, elem) in allocators.iter_mut().enumerate() {
+                unsafe {
+                    std::ptr::write(
+                        elem.as_mut_ptr(),
+                        Allocator {
+                            dram: AllocInner::<DRAMHeap>::with_capacity(
+                                (MemAddrRange::DRAM as usize + mem_each_shard * i) as *mut u8,
+                            ),
+                            pm: AllocInner::<PMHeap>::with_capacity(
+                                (MemAddrRange::PM as usize + mem_each_shard * i) as *mut u8,
+                            ),
+                        },
+                    );
+                }
+            }
+            unsafe { std::mem::transmute::<_, [Allocator; SHARD_NUM]>(allocators) }
+        });
+        #[cfg(feature = "shard-6")]
+        {
+            let v = nanorand::tls_rng().generate_range(0..SHARD_NUM);
+            unsafe { &allocator.get_unchecked(v) }
+        }
+
+        #[cfg(not(feature = "shard-6"))]
+        {
+            &allocator[0]
+        }
     }
 
     /// # Safety
@@ -270,7 +305,7 @@ impl<T: HeapManager> AllocInner<T> {
 
                     // Tag the pointer to prevent ABA problem
                     // TODO: maybe random number is too expensive, any simpler ways?
-                    let tag: u8 = rand::thread_rng().gen_range(0, 255);
+                    let tag: u8 = nanorand::tls_rng().generate_range(0..255);
                     let tag = (tag as usize) << 56;
 
                     debug_assert!(std::mem::size_of::<AtomicListNode>() <= BLOCK_SIZES[index]);

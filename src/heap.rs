@@ -245,7 +245,8 @@ pub struct DRAMHeap {
 unsafe impl Send for DRAMHeap {}
 unsafe impl Sync for DRAMHeap {}
 
-const DRAM_DEFAULT_ALLOC_SIZE: usize = 1024 * 1024 * 1024 * 2; // 2GB
+const DRAM_DEFAULT_ALLOC_SIZE: usize = 1024 * 1024 * 128; // 512MB
+
 impl HeapManager for DRAMHeap {
     fn new(heap_start_addr: *mut u8) -> Self {
         let heap_start_addr =
