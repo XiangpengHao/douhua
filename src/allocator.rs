@@ -5,7 +5,10 @@ use super::{
 use crate::{
     error::AllocError,
     heap::MemAddrRange,
-    utils::{backoff::Backoff, poison_memory_region, unpoison_memory_region, MemType, PAGE_SIZE},
+    utils::{
+        backoff::Backoff, list_index, poison_memory_region, unpoison_memory_region, MemType,
+        BLOCK_SIZES, PAGE_SIZE,
+    },
 };
 use nanorand::Rng;
 use once_cell::sync::OnceCell;
@@ -17,39 +20,6 @@ use shuttle::sync::atomic::{AtomicPtr, Ordering};
 
 #[cfg(not(all(feature = "shuttle", test)))]
 use std::sync::atomic::{AtomicPtr, Ordering};
-
-/// Block size to use
-///
-/// The sizes must be power of two because they are also used for block alignment
-/// We allow up to 2MB blocks (PM_PAGE_SIZE)
-const BLOCK_SIZES: &[usize] = &[
-    8,
-    16,
-    32,
-    64,
-    128,
-    256,
-    512,
-    1024,
-    2048,
-    4096,
-    4096 * 2,
-    4096 * 4,
-    4096 * 8,
-    4096 * 16,
-    4096 * 32,
-    4096 * 64,
-    4096 * 128,
-    4096 * 256,
-    4096 * 512,
-];
-
-fn list_index(layout: &Layout) -> Option<usize> {
-    let required_block_size = layout.size().max(layout.align());
-
-    // This is not the most efficient way, we might want to optimize it if necessary
-    BLOCK_SIZES.iter().position(|&s| s >= required_block_size)
-}
 
 pub struct Allocator {
     dram: AllocInner<DRAMHeap>,
@@ -222,8 +192,8 @@ impl<T: HeapManager> AllocInner<T> {
                     let mut heap_manager = if let Ok(h) = self.heap_manager.try_lock() {
                         h
                     } else {
-                        backoff.spin();
                         self.list_heads[index].store(node, Ordering::Release);
+                        backoff.spin();
                         continue;
                     };
 
