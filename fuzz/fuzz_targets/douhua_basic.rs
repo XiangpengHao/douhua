@@ -1,5 +1,5 @@
 #![no_main]
-use std::{alloc::Layout, collections::VecDeque};
+use std::{alloc::Layout, collections::HashMap};
 
 use arbitrary::Arbitrary;
 use douhua::Allocator;
@@ -9,12 +9,12 @@ use libfuzzer_sys::fuzz_target;
 #[derive(Arbitrary, Debug)]
 enum MapMethod {
     Alloc { size: u8 },
-    Dealloc,
+    Dealloc { id: i32 },
 }
 
 fuzz_target!(|methods: Vec<MapMethod>| {
-    // fuzzed code goes here
-    let mut allocated = VecDeque::new();
+    let mut allocated = HashMap::new();
+    let mut alloc_cnt = 0;
 
     for m in methods {
         match m {
@@ -28,23 +28,26 @@ fuzz_target!(|methods: Vec<MapMethod>| {
                         ptr.add(j).write(size);
                     }
                 }
-                allocated.push_back((ptr, size));
+                allocated.insert(alloc_cnt, (ptr, size));
+                alloc_cnt += 1;
             }
-            MapMethod::Dealloc => {
-                if let Some((ptr, size)) = allocated.pop_front() {
+            MapMethod::Dealloc { id } => {
+                let to_dealloc = allocated.get(&(id as usize));
+                if let Some((ptr, size)) = to_dealloc {
                     unsafe {
-                        for j in 0..size {
-                            assert_eq!(*ptr.add(j as usize), size);
+                        for j in 0..*size {
+                            assert_eq!(*ptr.add(j as usize), *size);
                         }
                     }
-                    let layout = Layout::from_size_align(size as usize * 8, 1).unwrap();
-                    unsafe { Allocator::get().dealloc(ptr, layout) };
+                    let layout = Layout::from_size_align(*size as usize * 8, 1).unwrap();
+                    unsafe { Allocator::get().dealloc(*ptr, layout) };
+                    allocated.remove(&(id as usize));
                 }
             }
         }
     }
 
-    for (ptr, size) in allocated {
+    for (_key, (ptr, size)) in allocated.into_iter() {
         unsafe {
             for j in 0..size {
                 assert_eq!(*ptr.add(j as usize), size);

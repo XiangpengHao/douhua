@@ -20,7 +20,7 @@ path = ".."
 members = ["."]
 
 [[bin]]
-name = "basic"
-path = "fuzz_targets/basic.rs"
+name = "douhua_basic"
+path = "fuzz_targets/douhua_basic.rs"
 test = false
 doc = false

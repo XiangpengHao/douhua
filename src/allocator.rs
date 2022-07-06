@@ -27,7 +27,7 @@ pub struct Allocator {
 }
 
 #[cfg(feature = "shard-6")]
-const SHARD_NUM: usize = 32;
+const SHARD_NUM: usize = 6;
 
 #[cfg(not(feature = "shard-6"))]
 const SHARD_NUM: usize = 1;
@@ -475,14 +475,8 @@ mod tests {
     fn shuttle_mt_basic() {
         let config = shuttle::Config::default();
         let mut runner = shuttle::PortfolioRunner::new(true, config);
-        runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
-        runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
-        runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
-        runner.add(shuttle::scheduler::PctScheduler::new(5, 4_000));
-        runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
-        runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
-        runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
-        runner.add(shuttle::scheduler::RandomScheduler::new(4_000));
+        runner.add(shuttle::scheduler::PctScheduler::new(5, 40_000));
+        runner.add(shuttle::scheduler::RandomScheduler::new(40_000));
 
         let heap_addr = std::sync::atomic::AtomicUsize::new(MemAddrRange::DRAM as usize);
 

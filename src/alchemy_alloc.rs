@@ -6,7 +6,6 @@ use std::{
     },
 };
 
-use nanorand::Rng;
 use once_cell::sync::OnceCell;
 
 use crate::{
@@ -60,6 +59,7 @@ impl AlchemyAlloc {
 
         #[cfg(feature = "shard-6")]
         {
+            use nanorand::Rng;
             let v = nanorand::tls_rng().generate_range(0..SHARD_NUM);
             unsafe { &allocators.get_unchecked(v) }
         }
