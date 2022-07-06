@@ -77,6 +77,8 @@ impl AlchemyAlloc {
         }
     }
 
+    /// # Safety
+    /// Internal use
     pub unsafe fn alloc_pm(&self, layout: Layout) -> Result<*mut u8, AllocError> {
         if layout.size() > PAGE_SIZE {
             panic!("Allocator only supports allocation of size <= 2MB");
@@ -142,6 +144,8 @@ impl AlchemyAlloc {
         }
     }
 
+    /// # Safety
+    /// Internal use
     pub unsafe fn alloc_pm_zeroed(&self, layout: Layout) -> Result<*mut u8, AllocError> {
         let ptr = self.alloc_pm(layout)?;
         std::ptr::write_bytes(ptr, 0, layout.size());
