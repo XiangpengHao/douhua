@@ -207,6 +207,10 @@ impl PMHeap {
             std::env::var("POOL_DIR").unwrap_or_else(|_| "target/memory_pool".to_string());
         let rv = self.alloc_large_from(layout, &base_str)?;
         self.inner_heap.heap_size += rv.1;
+        unsafe {
+            // pre-fault the pages
+            std::ptr::write_bytes(rv.0, 1, rv.1);
+        }
         Ok(rv.0)
     }
 
