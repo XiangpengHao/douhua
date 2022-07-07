@@ -84,7 +84,7 @@ impl AlchemyAlloc {
                 continue;
             }
 
-            if ((ptr as usize & 0x1f_ffff) + layout.size() > PAGE_SIZE) || ptr.is_null() {
+            if ((ptr as usize & 0x1f_ffff) + layout.size() > (PAGE_SIZE - 1)) || ptr.is_null() {
                 // too large, we should move to a new page
                 if let Err(_v) = self.block.compare_exchange_weak(
                     ptr,
