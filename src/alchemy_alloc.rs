@@ -14,18 +14,6 @@ use crate::{
     utils::{backoff::Backoff, PAGE_SIZE},
 };
 
-struct BlockPage {
-    ptr: AtomicPtr<u8>,
-}
-
-impl Default for BlockPage {
-    fn default() -> Self {
-        Self {
-            ptr: AtomicPtr::new(std::ptr::null_mut()),
-        }
-    }
-}
-
 #[cfg(feature = "shard-6")]
 const SHARD_NUM: usize = 8;
 
@@ -36,7 +24,7 @@ static ALLOCATOR: once_cell::sync::OnceCell<[AlchemyAlloc; SHARD_NUM]> = OnceCel
 
 /// A pm-only alloc-only allocator
 pub struct AlchemyAlloc {
-    list_heads: BlockPage,
+    block: AtomicPtr<u8>,
     heap_manager: Mutex<PMHeap>,
 }
 
@@ -72,7 +60,7 @@ impl AlchemyAlloc {
 
     fn new(heap_start_addr: *mut u8) -> Self {
         Self {
-            list_heads: Default::default(),
+            block: Default::default(),
             heap_manager: Mutex::new(PMHeap::new(heap_start_addr)),
         }
     }
@@ -85,11 +73,10 @@ impl AlchemyAlloc {
         }
 
         let backoff = Backoff::new();
-        let block = &self.list_heads;
 
         loop {
             // the order matters, addr must load before allocated
-            let ptr = block.ptr.load(Ordering::Acquire);
+            let ptr = self.block.load(Ordering::Acquire);
 
             if ptr as usize == usize::MAX {
                 // someone is holding the lock, wait for a new page
@@ -99,11 +86,11 @@ impl AlchemyAlloc {
 
             if ((ptr as usize & 0x1f_ffff) + layout.size() > PAGE_SIZE) || ptr.is_null() {
                 // too large, we should move to a new page
-                if let Err(_v) = block.ptr.compare_exchange_weak(
+                if let Err(_v) = self.block.compare_exchange_weak(
                     ptr,
                     usize::MAX as *mut u8,
-                    Ordering::Release,
-                    Ordering::Relaxed,
+                    Ordering::Acquire,
+                    Ordering::Acquire,
                 ) {
                     backoff.spin();
                 }
@@ -113,25 +100,24 @@ impl AlchemyAlloc {
                 let mut heap_manager = if let Ok(h) = self.heap_manager.lock() {
                     h
                 } else {
-                    block.ptr.store(ptr, Ordering::Release);
+                    self.block.store(ptr, Ordering::Release);
                     backoff.spin();
                     continue;
                 };
                 let page_mem = match { heap_manager.alloc_frame(page_layout) } {
                     Ok(v) => v,
                     Err(v) => {
-                        block.ptr.store(ptr, Ordering::Release);
+                        self.block.store(ptr, Ordering::Release);
                         return Err(v);
                     }
                 };
 
-                block
-                    .ptr
+                self.block
                     .store(page_mem.add(layout.size()), Ordering::Release);
                 return Ok(page_mem);
             } else {
                 let new_ptr = ptr.add(layout.size());
-                match block.ptr.compare_exchange_weak(
+                match self.block.compare_exchange_weak(
                     ptr,
                     new_ptr,
                     Ordering::Release,
@@ -150,5 +136,39 @@ impl AlchemyAlloc {
         let ptr = self.alloc_pm(layout)?;
         std::ptr::write_bytes(ptr, 0, layout.size());
         Ok(ptr)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::{heap::MemAddrRange, AlchemyAlloc};
+
+    #[test]
+    fn basic() {
+        let allocator = AlchemyAlloc::new(MemAddrRange::PM as usize as *mut u8);
+
+        let layout = Layout::from_size_align(128, 128).unwrap();
+
+        let alloc_cnt = 1024;
+
+        let mut allocated = vec![];
+        for _i in 0..alloc_cnt {
+            let ptr = unsafe { allocator.alloc_pm_zeroed(layout).unwrap() };
+            for i in 0..128 {
+                unsafe {
+                    *ptr.add(i) = i as u8;
+                }
+            }
+            allocated.push(ptr);
+        }
+
+        for i in allocated.iter() {
+            for j in 0..128 {
+                unsafe {
+                    assert_eq!(*i.add(j), j as u8);
+                }
+            }
+        }
     }
 }
