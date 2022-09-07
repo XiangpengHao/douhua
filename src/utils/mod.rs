@@ -33,6 +33,7 @@ pub(crate) fn unpoison_memory_region(addr: *const u8, size: usize) {
 pub enum MemType {
     DRAM,
     PM,
+    NUMA,
 }
 
 impl From<MemAddrRange> for MemType {
@@ -40,6 +41,7 @@ impl From<MemAddrRange> for MemType {
         match range {
             MemAddrRange::DRAM => MemType::DRAM,
             MemAddrRange::PM => MemType::PM,
+            MemAddrRange::NUMA => MemType::NUMA,
         }
     }
 }

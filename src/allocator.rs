@@ -77,6 +77,7 @@ impl Allocator {
         match mem_type {
             MemType::DRAM => self.dram.safe_alloc(layout),
             MemType::PM => self.pm.safe_alloc(layout),
+            MemType::NUMA => panic!("NUMA memory is not supported"),
         }
     }
 
@@ -90,6 +91,7 @@ impl Allocator {
         let ptr = match mem_type {
             MemType::DRAM => self.dram.safe_alloc(layout),
             MemType::PM => self.pm.safe_alloc(layout),
+            MemType::NUMA => panic!("NUMA memory is not supported"),
         }?;
         ptr.write_bytes(0, layout.size());
         Ok(ptr)
