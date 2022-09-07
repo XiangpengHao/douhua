@@ -30,7 +30,7 @@ fn basic() {
         }
 
         unsafe {
-            Allocator::get().dealloc(ptr, alloc_layout);
+            Allocator::get().dealloc(ptr, alloc_layout, douhua::MemType::DRAM);
         }
     }
 }

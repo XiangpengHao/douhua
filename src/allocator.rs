@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     error::AllocError,
-    heap::MemAddrRange,
+    heap::{MemAddrRange, NumaHeap},
     utils::{
         backoff::Backoff, list_index, poison_memory_region, unpoison_memory_region, MemType,
         BLOCK_SIZES, PAGE_SIZE,
@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 pub struct Allocator {
     dram: AllocInner<DRAMHeap>,
     pm: AllocInner<PMHeap>,
+    numa: AllocInner<NumaHeap>,
 }
 
 #[cfg(feature = "shard-6")]
@@ -47,12 +48,13 @@ impl Allocator {
                     std::ptr::write(
                         elem.as_mut_ptr(),
                         Allocator {
-                            dram: AllocInner::<DRAMHeap>::with_capacity(
+                            dram: AllocInner::<DRAMHeap>::with_heap_start(
                                 (MemAddrRange::DRAM as usize + mem_each_shard * i) as *mut u8,
                             ),
-                            pm: AllocInner::<PMHeap>::with_capacity(
+                            pm: AllocInner::<PMHeap>::with_heap_start(
                                 (MemAddrRange::PM as usize + mem_each_shard * i) as *mut u8,
                             ),
+                            numa: AllocInner::<NumaHeap>::new(),
                         },
                     );
                 }
@@ -77,7 +79,7 @@ impl Allocator {
         match mem_type {
             MemType::DRAM => self.dram.safe_alloc(layout),
             MemType::PM => self.pm.safe_alloc(layout),
-            MemType::NUMA => panic!("NUMA memory is not supported"),
+            MemType::NUMA => self.numa.safe_alloc(layout),
         }
     }
 
@@ -91,7 +93,7 @@ impl Allocator {
         let ptr = match mem_type {
             MemType::DRAM => self.dram.safe_alloc(layout),
             MemType::PM => self.pm.safe_alloc(layout),
-            MemType::NUMA => panic!("NUMA memory is not supported"),
+            MemType::NUMA => self.numa.safe_alloc(layout),
         }?;
         ptr.write_bytes(0, layout.size());
         Ok(ptr)
@@ -99,12 +101,11 @@ impl Allocator {
 
     /// # Safety
     /// unsafe inherit from GlobalAlloc
-    pub unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if self.dram.is_my_memory(ptr) {
-            self.dram.dealloc_inner(ptr, layout)
-        } else {
-            assert!(self.pm.is_my_memory(ptr));
-            self.pm.dealloc_inner(ptr, layout)
+    pub unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout, mem_type: MemType) {
+        match mem_type {
+            MemType::DRAM => self.dram.dealloc_inner(ptr, layout),
+            MemType::PM => self.pm.dealloc_inner(ptr, layout),
+            MemType::NUMA => self.numa.dealloc_inner(ptr, layout),
         }
     }
 }
@@ -115,7 +116,7 @@ pub(crate) struct AllocInner<T: HeapManager> {
 }
 
 impl AllocInner<DRAMHeap> {
-    pub(crate) fn with_capacity(heap_start_addr: *mut u8) -> Self {
+    pub(crate) fn with_heap_start(heap_start_addr: *mut u8) -> Self {
         AllocInner {
             list_heads: Default::default(),
             heap_manager: Mutex::new(DRAMHeap::new(heap_start_addr)),
@@ -124,10 +125,19 @@ impl AllocInner<DRAMHeap> {
 }
 
 impl AllocInner<PMHeap> {
-    pub(crate) fn with_capacity(heap_start_addr: *mut u8) -> Self {
+    pub(crate) fn with_heap_start(heap_start_addr: *mut u8) -> Self {
         AllocInner {
             list_heads: Default::default(),
             heap_manager: Mutex::new(PMHeap::new(heap_start_addr)),
+        }
+    }
+}
+
+impl AllocInner<NumaHeap> {
+    pub(crate) fn new() -> Self {
+        AllocInner {
+            list_heads: Default::default(),
+            heap_manager: Mutex::new(NumaHeap::new(MemAddrRange::NUMA as usize as *mut u8)),
         }
     }
 }
@@ -360,13 +370,13 @@ mod tests {
 
     #[test]
     fn dram_inner() {
-        let alloc = AllocInner::<DRAMHeap>::with_capacity(MemAddrRange::DRAM as usize as *mut u8);
+        let alloc = AllocInner::<DRAMHeap>::with_heap_start(MemAddrRange::DRAM as usize as *mut u8);
         basic_alloc_inner(alloc);
     }
 
     #[test]
     fn pm_inner() {
-        let alloc = AllocInner::<PMHeap>::with_capacity(MemAddrRange::PM as usize as *mut u8);
+        let alloc = AllocInner::<PMHeap>::with_heap_start(MemAddrRange::PM as usize as *mut u8);
         basic_alloc_inner(alloc);
     }
 
@@ -419,7 +429,7 @@ mod tests {
                 addr
             }
         });
-        let alloc = AllocInner::<DRAMHeap>::with_capacity(addr as *mut u8);
+        let alloc = AllocInner::<DRAMHeap>::with_heap_start(addr as *mut u8);
         let alloc = Arc::new(alloc);
 
         let allocated = Arc::new(crossbeam_queue::SegQueue::<(usize, usize)>::new());

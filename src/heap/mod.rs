@@ -7,9 +7,11 @@ use super::list_node::ListNode;
 use std::alloc::Layout;
 
 mod dram;
+mod numa;
 mod pm;
 
 pub use dram::DRAMHeap;
+pub use numa::NumaHeap;
 pub use pm::PMHeap;
 
 /// To deallocate the memory we need a way to tell the memory type,
