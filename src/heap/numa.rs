@@ -59,7 +59,10 @@ impl HeapManager for NumaHeap {
 
 impl NumaHeap {
     fn alloc_mem_onnode(node: i32, size_byte: usize) -> *mut u8 {
-        unsafe { libnuma_sys::numa_alloc_onnode(size_byte, node) as *mut u8 }
+        // FIXME: actually do the aligned allocation.
+        let ptr = unsafe { libnuma_sys::numa_alloc_onnode(size_byte, node) as *mut u8 };
+        let aligned_ptr = align_up(ptr as usize, PAGE_SIZE);
+        aligned_ptr as *mut u8
     }
 
     fn alloc_large(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
