@@ -26,13 +26,11 @@ pub struct PMHeap {
 unsafe impl Send for PMHeap {}
 unsafe impl Sync for PMHeap {}
 
-const PM_DEFAULT_ALLOC_SIZE: usize = 1024 * 1024 * 1024 * 16; // 4GB
+const PM_DEFAULT_ALLOC_SIZE: usize = 1024 * 1024 * 512; // 1GB
 
 impl HeapManager for PMHeap {
     fn new(heap_start_addr: *mut u8) -> Self {
-        // let virtual_high_addr = MemAddrRange::from(MemType::PM) as usize as *mut u8;
-
-        let mut manager = PMHeap {
+        let manager = PMHeap {
             inner_heap: InnerHeap {
                 heap_size: 0,
                 high_addr: heap_start_addr,
@@ -43,9 +41,9 @@ impl HeapManager for PMHeap {
             files: HashMap::new(),
         };
 
-        // init the frame
-        let layout = Layout::from_size_align(PM_DEFAULT_ALLOC_SIZE, PAGE_SIZE).unwrap();
-        manager.expand_heap(layout).unwrap();
+        // lazy init the frame
+        // let layout = Layout::from_size_align(PM_DEFAULT_ALLOC_SIZE, PAGE_SIZE).unwrap();
+        // manager.expand_heap(layout).unwrap();
 
         manager
     }
