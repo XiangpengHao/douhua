@@ -17,9 +17,12 @@ const NUMA_DEFAULT_ALLOC_SIZE: usize = 1024 * 1024 * 512; // 512MB
 
 impl HeapManager for NumaHeap {
     fn new(_heap_start_addr: *mut u8) -> Self {
-        unsafe {
-            let v = libnuma_sys::numa_available();
-            assert!(v != -1, "numa is not available on this machine.");
+        #[cfg(not(feature = "mock_numa"))]
+        {
+            unsafe {
+                let v = libnuma_sys::numa_available();
+                assert!(v != -1, "numa is not available on this machine.");
+            }
         }
         let heap_start_addr = NumaHeap::alloc_mem_onnode(FAR_NODE, NUMA_DEFAULT_ALLOC_SIZE);
 
@@ -47,8 +50,12 @@ impl HeapManager for NumaHeap {
 
     unsafe fn dealloc_frame(&mut self, ptr: *mut u8, layout: Layout) {
         let aligned_size = align_up(layout.size(), PAGE_SIZE);
-        unsafe {
-            libnuma_sys::numa_free(ptr as *mut libc::c_void, aligned_size);
+        if cfg!(feature = "mock_numa") {
+            std::alloc::dealloc(ptr, layout);
+        } else {
+            unsafe {
+                libnuma_sys::numa_free(ptr as *mut libc::c_void, aligned_size);
+            }
         }
     }
 
@@ -60,9 +67,14 @@ impl HeapManager for NumaHeap {
 impl NumaHeap {
     fn alloc_mem_onnode(node: i32, size_byte: usize) -> *mut u8 {
         // FIXME: actually do the aligned allocation.
-        let ptr = unsafe { libnuma_sys::numa_alloc_onnode(size_byte, node) as *mut u8 };
-        let aligned_ptr = align_up(ptr as usize, PAGE_SIZE);
-        aligned_ptr as *mut u8
+        if cfg!(feature = "mock_numa") {
+            let layout = std::alloc::Layout::from_size_align(size_byte, PAGE_SIZE).unwrap();
+            unsafe { std::alloc::alloc(layout) }
+        } else {
+            let ptr = unsafe { libnuma_sys::numa_alloc_onnode(size_byte, node) as *mut u8 };
+            let aligned_ptr = align_up(ptr as usize, PAGE_SIZE);
+            aligned_ptr as *mut u8
+        }
     }
 
     fn alloc_large(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {

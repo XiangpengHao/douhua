@@ -49,7 +49,7 @@ impl AlchemyAlloc {
         {
             use nanorand::Rng;
             let v = nanorand::tls_rng().generate_range(0..SHARD_NUM);
-            unsafe { &allocators.get_unchecked(v) }
+            unsafe { allocators.get_unchecked(v) }
         }
 
         #[cfg(not(feature = "shard-6"))]

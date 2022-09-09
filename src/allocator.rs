@@ -64,7 +64,7 @@ impl Allocator {
         #[cfg(feature = "shard-6")]
         {
             let v = nanorand::tls_rng().generate_range(0..SHARD_NUM);
-            unsafe { &allocator.get_unchecked(v) }
+            unsafe { allocator.get_unchecked(v) }
         }
 
         #[cfg(not(feature = "shard-6"))]

@@ -30,7 +30,8 @@ const PM_DEFAULT_ALLOC_SIZE: usize = 1024 * 1024 * 512; // 1GB
 
 impl HeapManager for PMHeap {
     fn new(heap_start_addr: *mut u8) -> Self {
-        let manager = PMHeap {
+        // lazy init the frame, no allocation on creation.
+        PMHeap {
             inner_heap: InnerHeap {
                 heap_size: 0,
                 high_addr: heap_start_addr,
@@ -39,13 +40,7 @@ impl HeapManager for PMHeap {
             },
             virtual_high_addr: heap_start_addr,
             files: HashMap::new(),
-        };
-
-        // lazy init the frame
-        // let layout = Layout::from_size_align(PM_DEFAULT_ALLOC_SIZE, PAGE_SIZE).unwrap();
-        // manager.expand_heap(layout).unwrap();
-
-        manager
+        }
     }
 
     unsafe fn alloc_frame(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
