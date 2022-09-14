@@ -71,7 +71,8 @@ impl NumaHeap {
             let layout = std::alloc::Layout::from_size_align(size_byte, PAGE_SIZE).unwrap();
             unsafe { std::alloc::alloc(layout) }
         } else {
-            let ptr = unsafe { libnuma_sys::numa_alloc_onnode(size_byte, node) as *mut u8 };
+            let aligned_size = size_byte + PAGE_SIZE; // we need to allocate one extra page to ensure alignment.
+            let ptr = unsafe { libnuma_sys::numa_alloc_onnode(aligned_size, node) as *mut u8 };
             let aligned_ptr = align_up(ptr as usize, PAGE_SIZE);
             aligned_ptr as *mut u8
         }
