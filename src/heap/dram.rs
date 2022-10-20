@@ -31,7 +31,7 @@ impl HeapManager for DRAMHeap {
         let inner_heap = InnerHeap {
             heap_size: DRAM_DEFAULT_ALLOC_SIZE,
             heap_start: heap_start_addr,
-            high_addr: heap_start_addr,
+            next_alloc_addr: heap_start_addr,
             free_list: ListNode::new(),
         };
 
@@ -46,7 +46,7 @@ impl HeapManager for DRAMHeap {
     unsafe fn alloc_frame(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
         let size = layout.size();
         if size <= PAGE_SIZE {
-            self.alloc_page(layout)
+            self.alloc_page()
         } else {
             self.alloc_large(layout)
         }
@@ -95,7 +95,7 @@ impl DRAMHeap {
     }
 
     /// Allocate pages from heap
-    fn alloc_page(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
+    fn alloc_page(&mut self) -> Result<*mut u8, AllocError> {
         if let Some(head_next) = self.inner_heap.free_list.next.take() {
             self.inner_heap.free_list.next = head_next.next.take();
             Ok(head_next.start_address() as *mut u8)
@@ -108,7 +108,7 @@ impl DRAMHeap {
                         Layout::from_size_align(DRAM_DEFAULT_ALLOC_SIZE, PAGE_SIZE).unwrap(),
                     )?;
                     self.inner_heap.heap_size += DRAM_DEFAULT_ALLOC_SIZE;
-                    self.alloc_page(layout)
+                    self.alloc_page()
                 }
             }
         }

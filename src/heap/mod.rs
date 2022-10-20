@@ -54,16 +54,16 @@ struct InnerHeap {
     heap_start: *mut u8,
     heap_size: usize,
     free_list: ListNode,
-    high_addr: *mut u8,
+    next_alloc_addr: *mut u8,
 }
 
 impl InnerHeap {
     fn expand_free_page(&mut self) -> Result<*mut u8, AllocError> {
-        let page_start = self.high_addr;
+        let page_start = self.next_alloc_addr;
         if page_start as *const u8 == self.heap_end() {
             return Err(AllocError::OutOfMemory);
         }
-        self.high_addr = unsafe { self.high_addr.add(PAGE_SIZE) };
+        self.next_alloc_addr = unsafe { self.next_alloc_addr.add(PAGE_SIZE) };
         Ok(page_start as *mut u8)
     }
 

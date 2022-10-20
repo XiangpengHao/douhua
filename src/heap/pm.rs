@@ -34,7 +34,7 @@ impl HeapManager for PMHeap {
         PMHeap {
             inner_heap: InnerHeap {
                 heap_size: 0,
-                high_addr: heap_start_addr,
+                next_alloc_addr: heap_start_addr,
                 free_list: ListNode::new(),
                 heap_start: heap_start_addr,
             },
@@ -47,7 +47,7 @@ impl HeapManager for PMHeap {
         let size = layout.size();
         if size <= PAGE_SIZE {
             assert_eq!(size, PAGE_SIZE);
-            self.alloc_page(layout)
+            self.alloc_page()
         } else {
             let base_str =
                 std::env::var("POOL_DIR").unwrap_or_else(|_| "target/memory_pool".to_string());
@@ -72,7 +72,7 @@ impl HeapManager for PMHeap {
 
 impl PMHeap {
     /// Allocate pages from heap
-    fn alloc_page(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
+    fn alloc_page(&mut self) -> Result<*mut u8, AllocError> {
         if let Some(head_next) = self.inner_heap.free_list.next.take() {
             self.inner_heap.free_list.next = head_next.next.take();
             Ok(head_next.start_address() as *mut u8)
@@ -85,7 +85,7 @@ impl PMHeap {
                     let large_layout =
                         Layout::from_size_align(PM_DEFAULT_ALLOC_SIZE, PAGE_SIZE).unwrap();
                     self.expand_heap(large_layout).unwrap();
-                    self.alloc_page(layout)
+                    self.alloc_page()
                 }
             }
         }
