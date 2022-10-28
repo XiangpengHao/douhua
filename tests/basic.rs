@@ -1,6 +1,8 @@
+#![feature(slice_ptr_get)]
+
 use std::alloc::Layout;
 
-use douhua::Allocator;
+use douhua::{Allocator, TieredAllocator};
 
 const PM_PAGE_SIZE: usize = 1024 * 1024 * 2;
 
@@ -13,24 +15,25 @@ fn basic() {
 
     // allocate all memory, the layout are aligned so we can use all the memory
     for i in 0..max_cnt {
-        let ptr =
-            unsafe { Allocator::get().alloc_zeroed(alloc_layout, douhua::MemType::DRAM) }.unwrap();
-        unsafe {
-            for j in 0..alloc_layout.size() {
-                ptr.add(j).write(i as u8);
-            }
+        let mut ptr = Allocator::get()
+            .allocate_zeroed(alloc_layout, douhua::MemType::DRAM)
+            .unwrap();
+        let val = unsafe { ptr.as_mut() };
+        for j in 0..alloc_layout.size() {
+            val[j] = i as u8;
         }
         allocated.push(ptr);
     }
 
     // check sanity and dealloc them
     for (i, ptr) in allocated.into_iter().enumerate() {
+        let val = unsafe { ptr.as_ref() };
         for j in 0..alloc_layout.size() {
-            assert_eq!(unsafe { ptr.add(j).read() }, i as u8);
+            assert_eq!(val[j], i as u8);
         }
 
         unsafe {
-            Allocator::get().dealloc(ptr, alloc_layout, douhua::MemType::DRAM);
+            Allocator::get().deallocate(ptr.as_non_null_ptr(), alloc_layout, douhua::MemType::DRAM);
         }
     }
 }

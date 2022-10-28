@@ -15,6 +15,7 @@ use crate::{
         backoff::Backoff, list_index, poison_memory_region, unpoison_memory_region, MemType,
         BLOCK_SIZES, PAGE_SIZE,
     },
+    TieredAllocator,
 };
 use nanorand::Rng;
 use once_cell::sync::OnceCell;
@@ -29,8 +30,10 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 pub struct Allocator {
     dram: AllocInner<DRAMHeap>,
+
     #[cfg(feature = "pmem")]
     pm: AllocInner<PMHeap>,
+
     #[cfg(feature = "numa")]
     numa: AllocInner<NumaHeap>,
 }
@@ -42,6 +45,36 @@ const SHARD_NUM: usize = 6;
 const SHARD_NUM: usize = 1;
 
 static ALLOCATOR: once_cell::sync::OnceCell<[Allocator; SHARD_NUM]> = OnceCell::new();
+
+unsafe impl TieredAllocator for Allocator {
+    fn allocate(
+        &self,
+        layout: Layout,
+        mem_type: MemType,
+    ) -> Result<std::ptr::NonNull<[u8]>, crate::AllocError> {
+        let ptr = match mem_type {
+            MemType::DRAM => self.dram.safe_alloc(layout),
+            #[cfg(feature = "pmem")]
+            MemType::PM => self.pm.safe_alloc(layout),
+            #[cfg(feature = "numa")]
+            MemType::NUMA => self.numa.safe_alloc(layout),
+        }?;
+
+        let ptr_slice = std::ptr::slice_from_raw_parts_mut(ptr, layout.size());
+        Ok(std::ptr::NonNull::new(ptr_slice).unwrap())
+    }
+
+    unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: Layout, mem_type: MemType) {
+        let raw_ptr = ptr.as_ptr();
+        match mem_type {
+            MemType::DRAM => self.dram.dealloc_inner(raw_ptr, layout),
+            #[cfg(feature = "pmem")]
+            MemType::PM => self.pm.dealloc_inner(raw_ptr, layout),
+            #[cfg(feature = "numa")]
+            MemType::NUMA => self.numa.dealloc_inner(raw_ptr, layout),
+        }
+    }
+}
 
 impl Allocator {
     pub fn get() -> &'static Allocator {
@@ -80,48 +113,6 @@ impl Allocator {
         #[cfg(not(feature = "shard-6"))]
         {
             &allocator[0]
-        }
-    }
-
-    /// # Safety
-    /// unsafe inherit from GlobalAlloc
-    pub unsafe fn alloc(&self, layout: Layout, mem_type: MemType) -> Result<*mut u8, AllocError> {
-        match mem_type {
-            MemType::DRAM => self.dram.safe_alloc(layout),
-            #[cfg(feature = "pmem")]
-            MemType::PM => self.pm.safe_alloc(layout),
-            #[cfg(feature = "numa")]
-            MemType::NUMA => self.numa.safe_alloc(layout),
-        }
-    }
-
-    /// # Safety
-    /// unsafe inherit from GlobalAlloc
-    pub unsafe fn alloc_zeroed(
-        &self,
-        layout: Layout,
-        mem_type: MemType,
-    ) -> Result<*mut u8, AllocError> {
-        let ptr = match mem_type {
-            MemType::DRAM => self.dram.safe_alloc(layout),
-            #[cfg(feature = "pmem")]
-            MemType::PM => self.pm.safe_alloc(layout),
-            #[cfg(feature = "numa")]
-            MemType::NUMA => self.numa.safe_alloc(layout),
-        }?;
-        ptr.write_bytes(0, layout.size());
-        Ok(ptr)
-    }
-
-    /// # Safety
-    /// unsafe inherit from GlobalAlloc
-    pub unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout, mem_type: MemType) {
-        match mem_type {
-            MemType::DRAM => self.dram.dealloc_inner(ptr, layout),
-            #[cfg(feature = "pmem")]
-            MemType::PM => self.pm.dealloc_inner(ptr, layout),
-            #[cfg(feature = "numa")]
-            MemType::NUMA => self.numa.dealloc_inner(ptr, layout),
         }
     }
 }
