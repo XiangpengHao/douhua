@@ -1,12 +1,12 @@
 use super::{
-    heap::{DRAMHeap, HeapManager},
+    heap::{dram::DRAMHeap, HeapManager},
     list_node::AtomicListNode,
 };
 #[cfg(feature = "pmem")]
-use crate::heap::PMHeap;
+use crate::heap::pm::PMHeap;
 
 #[cfg(feature = "numa")]
-use crate::heap::NumaHeap;
+use crate::heap::numa::NumaHeap;
 
 use crate::{
     error::AllocError,
@@ -127,8 +127,8 @@ impl Allocator {
 }
 
 pub(crate) struct AllocInner<T: HeapManager> {
-    list_heads: [AtomicPtr<AtomicListNode>; BLOCK_SIZES.len()],
-    heap_manager: Mutex<T>,
+    pub(crate) list_heads: [AtomicPtr<AtomicListNode>; BLOCK_SIZES.len()],
+    pub(crate) heap_manager: Mutex<T>,
 }
 
 impl AllocInner<DRAMHeap> {
@@ -136,26 +136,6 @@ impl AllocInner<DRAMHeap> {
         AllocInner {
             list_heads: Default::default(),
             heap_manager: Mutex::new(DRAMHeap::new(heap_start_addr)),
-        }
-    }
-}
-
-#[cfg(feature = "pmem")]
-impl AllocInner<PMHeap> {
-    pub(crate) fn with_heap_start(heap_start_addr: *mut u8) -> Self {
-        AllocInner {
-            list_heads: Default::default(),
-            heap_manager: Mutex::new(PMHeap::new(heap_start_addr)),
-        }
-    }
-}
-
-#[cfg(feature = "numa")]
-impl AllocInner<NumaHeap> {
-    pub(crate) fn new() -> Self {
-        AllocInner {
-            list_heads: Default::default(),
-            heap_manager: Mutex::new(NumaHeap::new(MemAddrRange::NUMA as usize as *mut u8)),
         }
     }
 }
@@ -345,7 +325,7 @@ impl<T: HeapManager> AllocInner<T> {
 mod tests {
     use super::*;
     use crate::{
-        heap::{DRAMHeap, HeapManager, MemAddrRange},
+        heap::{HeapManager, MemAddrRange},
         utils::PAGE_SIZE,
     };
     use std::alloc::Layout;

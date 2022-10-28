@@ -1,8 +1,8 @@
-use std::alloc::Layout;
+use std::{alloc::Layout, sync::Mutex};
 
-use crate::{error::AllocError, list_node::ListNode, utils::PAGE_SIZE};
+use crate::{allocator::AllocInner, error::AllocError, list_node::ListNode, utils::PAGE_SIZE};
 
-use super::{align_up, HeapManager, InnerHeap};
+use super::{align_up, HeapManager, InnerHeap, MemAddrRange};
 
 pub struct NumaHeap {
     inner_heap: InnerHeap,
@@ -101,6 +101,15 @@ impl NumaHeap {
                     self.alloc_page()
                 }
             }
+        }
+    }
+}
+
+impl AllocInner<NumaHeap> {
+    pub(crate) fn new() -> Self {
+        AllocInner {
+            list_heads: Default::default(),
+            heap_manager: Mutex::new(NumaHeap::new(MemAddrRange::NUMA as usize as *mut u8)),
         }
     }
 }

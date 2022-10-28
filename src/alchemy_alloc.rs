@@ -10,7 +10,7 @@ use once_cell::sync::OnceCell;
 
 use crate::{
     error::AllocError,
-    heap::{HeapManager, MemAddrRange, PMHeap},
+    heap::{pm::PMHeap, HeapManager, MemAddrRange},
     utils::{backoff::Backoff, PAGE_SIZE},
 };
 

@@ -6,21 +6,13 @@ use crate::{
 use super::list_node::ListNode;
 use std::alloc::Layout;
 
-mod dram;
+pub(crate) mod dram;
 
 #[cfg(feature = "numa")]
-mod numa;
+pub(crate) mod numa;
 
 #[cfg(feature = "pmem")]
-mod pm;
-
-pub use dram::DRAMHeap;
-
-#[cfg(feature = "numa")]
-pub use numa::NumaHeap;
-
-#[cfg(feature = "pmem")]
-pub use pm::PMHeap;
+pub(crate) mod pm;
 
 /// To deallocate the memory we need a way to tell the memory type,
 /// i.e. we need to know where it comes from, {local, remote} {DRAM PM}
@@ -66,6 +58,7 @@ impl From<*const u8> for MemAddrRange {
         #[cfg(feature = "numa")]
         return MemAddrRange::NUMA;
 
+        #[cfg(all(not(feature = "pmem"), not(feature = "numa")))]
         unreachable!()
     }
 }
@@ -165,12 +158,12 @@ mod tests {
 
     #[test]
     fn dram_heap() {
-        basic_heap_alloc::<DRAMHeap>(MemType::DRAM);
+        basic_heap_alloc::<dram::DRAMHeap>(MemType::DRAM);
     }
 
     #[cfg(feature = "pmem")]
     #[test]
     fn pm_heap() {
-        basic_heap_alloc::<PMHeap>(MemType::PM);
+        basic_heap_alloc::<pm::PMHeap>(MemType::PM);
     }
 }

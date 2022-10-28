@@ -3,9 +3,11 @@ use std::{
     collections::HashMap,
     fs::File,
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 use crate::{
+    allocator::AllocInner,
     error::{AllocError, SystemError},
     list_node::ListNode,
     utils::{
@@ -210,6 +212,15 @@ impl Drop for PMHeap {
     fn drop(&mut self) {
         for (_ptr, t) in self.files.iter() {
             std::fs::remove_file(t).unwrap();
+        }
+    }
+}
+
+impl AllocInner<PMHeap> {
+    pub(crate) fn with_heap_start(heap_start_addr: *mut u8) -> Self {
+        AllocInner {
+            list_heads: Default::default(),
+            heap_manager: Mutex::new(PMHeap::new(heap_start_addr)),
         }
     }
 }

@@ -1,6 +1,8 @@
 {
 	"rust-analyzer.cargo.features": [
 		"shuttle",
-		"shard-6"
+		"shard-6",
+		"numa",
+		"pmem",
 	]
 }
