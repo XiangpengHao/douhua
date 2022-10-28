@@ -14,7 +14,7 @@ use std::{alloc::Layout, ptr::NonNull};
 #[cfg(feature = "pmem")]
 pub use alchemy_alloc::AlchemyAlloc;
 pub use allocator::Allocator;
-use error::AllocError;
+pub use error::AllocError;
 pub use utils::MemType;
 
 /// # Safety
