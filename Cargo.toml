@@ -11,7 +11,7 @@ libc = "0.2.123"
 once_cell = "1.10.0"
 thiserror = "1.0.30"
 nanorand = { version = "0.7.0"}
-libnuma-sys = "0.0.4"
+libnuma-sys = {version = "0.0.4", optional = true}
 
 [dev-dependencies]
 crossbeam-queue = "0.3.5"
@@ -19,6 +19,8 @@ shuttle = "0.1.0"
 rand = "0.7.0"
 
 [features]
+pmem = []
+numa = ["libnuma-sys"]
 sans = []
 shard-6 = []
 shuttle = []

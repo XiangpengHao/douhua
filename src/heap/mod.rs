@@ -7,11 +7,19 @@ use super::list_node::ListNode;
 use std::alloc::Layout;
 
 mod dram;
+
+#[cfg(feature = "numa")]
 mod numa;
+
+#[cfg(feature = "pmem")]
 mod pm;
 
 pub use dram::DRAMHeap;
+
+#[cfg(feature = "numa")]
 pub use numa::NumaHeap;
+
+#[cfg(feature = "pmem")]
 pub use pm::PMHeap;
 
 /// To deallocate the memory we need a way to tell the memory type,
@@ -22,15 +30,19 @@ pub use pm::PMHeap;
 #[allow(clippy::enum_clike_unportable_variant)]
 pub(crate) enum MemAddrRange {
     DRAM = 0x5a00_0000_0000,
+    #[cfg(feature = "pmem")]
     PM = 0x5d00_0000_0000,
+    #[cfg(feature = "numa")]
     NUMA = 0, // numa memory don't have a fixed address range
 }
 
 impl From<MemType> for MemAddrRange {
     fn from(t: MemType) -> Self {
         match t {
+            #[cfg(feature = "pmem")]
             MemType::PM => MemAddrRange::PM,
             MemType::DRAM => MemAddrRange::DRAM,
+            #[cfg(feature = "numa")]
             MemType::NUMA => MemAddrRange::NUMA,
         }
     }
@@ -40,12 +52,21 @@ impl From<*const u8> for MemAddrRange {
     fn from(addr: *const u8) -> Self {
         let dram_range = MemAddrRange::DRAM as usize;
         if (addr as usize & dram_range) == dram_range {
-            MemAddrRange::DRAM
-        } else if (addr as usize & MemAddrRange::PM as usize) == MemAddrRange::PM as usize {
-            MemAddrRange::PM
-        } else {
-            MemAddrRange::NUMA
+            return MemAddrRange::DRAM;
         }
+
+        #[cfg(feature = "pmem")]
+        {
+            let pm_range = MemAddrRange::PM as usize;
+            if (addr as usize & pm_range) == pm_range {
+                return MemAddrRange::PM;
+            }
+        }
+
+        #[cfg(feature = "numa")]
+        return MemAddrRange::NUMA;
+
+        unreachable!()
     }
 }
 
@@ -147,6 +168,7 @@ mod tests {
         basic_heap_alloc::<DRAMHeap>(MemType::DRAM);
     }
 
+    #[cfg(feature = "pmem")]
     #[test]
     fn pm_heap() {
         basic_heap_alloc::<PMHeap>(MemType::PM);

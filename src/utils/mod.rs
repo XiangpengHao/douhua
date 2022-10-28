@@ -32,7 +32,9 @@ pub(crate) fn unpoison_memory_region(addr: *const u8, size: usize) {
 #[allow(clippy::upper_case_acronyms)]
 pub enum MemType {
     DRAM,
+    #[cfg(feature = "pmem")]
     PM,
+    #[cfg(feature = "numa")]
     NUMA,
 }
 
@@ -40,7 +42,9 @@ impl From<MemAddrRange> for MemType {
     fn from(range: MemAddrRange) -> Self {
         match range {
             MemAddrRange::DRAM => MemType::DRAM,
+            #[cfg(feature = "pmem")]
             MemAddrRange::PM => MemType::PM,
+            #[cfg(feature = "numa")]
             MemAddrRange::NUMA => MemType::NUMA,
         }
     }

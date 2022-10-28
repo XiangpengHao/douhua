@@ -1,20 +1,79 @@
 use std::{
     alloc::Layout,
     collections::HashMap,
+    fs::File,
     path::{Path, PathBuf},
 };
 
 use crate::{
-    error::AllocError,
+    error::{AllocError, SystemError},
     list_node::ListNode,
     utils::{
-        mmap::{create_and_map_pool, unmap_memory},
+        mmap::{map_dram_builder, unmap_memory, MmapBuilder},
         PAGE_SIZE,
     },
     MemType,
 };
 
 use super::{align_up, HeapManager, InnerHeap, MemAddrRange};
+
+/// A helper to create builder for nvm mapping
+fn map_nvm_builder(heap_size: usize, addr: Option<*const u8>, fd: i32) -> MmapBuilder {
+    let mut builder = MmapBuilder::new(heap_size).nvm_file(fd);
+    if let Some(addr) = addr {
+        builder = builder.addr(addr);
+    }
+    builder
+}
+
+pub(crate) fn create_and_allocate_file<P: AsRef<std::path::Path>>(
+    pool_path: P,
+    file_size: usize,
+) -> Result<File, SystemError> {
+    use std::fs::OpenOptions;
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(pool_path)
+        .map_err(|_e| SystemError::FileAlloc)?;
+
+    file.set_len(file_size as u64)
+        .map_err(|_e| SystemError::FileAlloc)?;
+
+    file.sync_all().unwrap();
+    Ok(file)
+}
+
+fn create_and_map_pool<P: AsRef<std::path::Path>>(
+    pool_path: P,
+    heap_size: usize,
+    addr: Option<*const u8>,
+) -> Result<*mut u8, SystemError> {
+    use std::os::unix::io::AsRawFd;
+    let fd = create_and_allocate_file(pool_path, heap_size)?;
+
+    let map_sync = map_nvm_builder(heap_size, addr, fd.as_raw_fd()).map();
+
+    match map_sync {
+        Ok(addr) => Ok(addr),
+        Err(_) => {
+            println!("Mapping with `MAP_SYNC` failed, are you using a NVM file? Try to map as a disk file instead...");
+            let map_file = map_dram_builder(heap_size, addr, Some(fd.as_raw_fd()))
+                .huge_page()
+                .map();
+            match map_file {
+                Ok(addr) => Ok(addr),
+                Err(_) => {
+                    println!("Mapping with MAP_HUGETLB failed, falling back to use 4KB pages");
+                    map_dram_builder(heap_size, addr, Some(fd.as_raw_fd())).map()
+                }
+            }
+        }
+    }
+}
 
 pub struct PMHeap {
     inner_heap: InnerHeap,

@@ -1,10 +1,16 @@
 use super::{
-    heap::{DRAMHeap, HeapManager, PMHeap},
+    heap::{DRAMHeap, HeapManager},
     list_node::AtomicListNode,
 };
+#[cfg(feature = "pmem")]
+use crate::heap::PMHeap;
+
+#[cfg(feature = "numa")]
+use crate::heap::NumaHeap;
+
 use crate::{
     error::AllocError,
-    heap::{MemAddrRange, NumaHeap},
+    heap::MemAddrRange,
     utils::{
         backoff::Backoff, list_index, poison_memory_region, unpoison_memory_region, MemType,
         BLOCK_SIZES, PAGE_SIZE,
@@ -23,7 +29,9 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 pub struct Allocator {
     dram: AllocInner<DRAMHeap>,
+    #[cfg(feature = "pmem")]
     pm: AllocInner<PMHeap>,
+    #[cfg(feature = "numa")]
     numa: AllocInner<NumaHeap>,
 }
 
@@ -51,9 +59,11 @@ impl Allocator {
                             dram: AllocInner::<DRAMHeap>::with_heap_start(
                                 (MemAddrRange::DRAM as usize + mem_each_shard * i) as *mut u8,
                             ),
+                            #[cfg(feature = "pmem")]
                             pm: AllocInner::<PMHeap>::with_heap_start(
                                 (MemAddrRange::PM as usize + mem_each_shard * i) as *mut u8,
                             ),
+                            #[cfg(feature = "numa")]
                             numa: AllocInner::<NumaHeap>::new(),
                         },
                     );
@@ -78,7 +88,9 @@ impl Allocator {
     pub unsafe fn alloc(&self, layout: Layout, mem_type: MemType) -> Result<*mut u8, AllocError> {
         match mem_type {
             MemType::DRAM => self.dram.safe_alloc(layout),
+            #[cfg(feature = "pmem")]
             MemType::PM => self.pm.safe_alloc(layout),
+            #[cfg(feature = "numa")]
             MemType::NUMA => self.numa.safe_alloc(layout),
         }
     }
@@ -92,7 +104,9 @@ impl Allocator {
     ) -> Result<*mut u8, AllocError> {
         let ptr = match mem_type {
             MemType::DRAM => self.dram.safe_alloc(layout),
+            #[cfg(feature = "pmem")]
             MemType::PM => self.pm.safe_alloc(layout),
+            #[cfg(feature = "numa")]
             MemType::NUMA => self.numa.safe_alloc(layout),
         }?;
         ptr.write_bytes(0, layout.size());
@@ -104,7 +118,9 @@ impl Allocator {
     pub unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout, mem_type: MemType) {
         match mem_type {
             MemType::DRAM => self.dram.dealloc_inner(ptr, layout),
+            #[cfg(feature = "pmem")]
             MemType::PM => self.pm.dealloc_inner(ptr, layout),
+            #[cfg(feature = "numa")]
             MemType::NUMA => self.numa.dealloc_inner(ptr, layout),
         }
     }
@@ -124,6 +140,7 @@ impl AllocInner<DRAMHeap> {
     }
 }
 
+#[cfg(feature = "pmem")]
 impl AllocInner<PMHeap> {
     pub(crate) fn with_heap_start(heap_start_addr: *mut u8) -> Self {
         AllocInner {
@@ -133,6 +150,7 @@ impl AllocInner<PMHeap> {
     }
 }
 
+#[cfg(feature = "numa")]
 impl AllocInner<NumaHeap> {
     pub(crate) fn new() -> Self {
         AllocInner {
@@ -325,9 +343,9 @@ impl<T: HeapManager> AllocInner<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::AllocInner;
+    use super::*;
     use crate::{
-        heap::{DRAMHeap, HeapManager, MemAddrRange, PMHeap},
+        heap::{DRAMHeap, HeapManager, MemAddrRange},
         utils::PAGE_SIZE,
     };
     use std::alloc::Layout;
@@ -374,6 +392,7 @@ mod tests {
         basic_alloc_inner(alloc);
     }
 
+    #[cfg(feature = "pmem")]
     #[test]
     fn pm_inner() {
         let alloc = AllocInner::<PMHeap>::with_heap_start(MemAddrRange::PM as usize as *mut u8);

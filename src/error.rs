@@ -3,6 +3,7 @@ use thiserror::Error;
 /// Internal unrecoverable system error
 #[derive(Debug, Error)]
 pub(crate) enum SystemError {
+    #[cfg(feature = "pmem")]
     #[error("failed to allocate pm file")]
     FileAlloc,
     #[error("failed to mmap the pm file")]
