@@ -18,8 +18,13 @@ pub use utils::MemType;
 
 pub enum AllocError {}
 
+/// # Safety
+/// Please check the official documentation of [`std::alloc::Allocator`](https://doc.rust-lang.org/std/alloc/trait.Allocator.html)
 pub unsafe trait TieredAllocator {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>;
+
+    /// # Safety
+    /// Please check the official documentation of [`std::alloc::Allocator`](https://doc.rust-lang.org/std/alloc/trait.Allocator.html)
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout);
 
     fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
