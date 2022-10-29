@@ -37,3 +37,14 @@ pub unsafe trait TieredAllocator {
         Ok(ptr)
     }
 }
+
+#[inline]
+#[allow(unused_variables)]
+pub fn remote_delay() {
+    #[cfg(feature = "add_delay")]
+    {
+        for _ in 0..(1 << 7) {
+            std::hint::spin_loop();
+        }
+    }
+}
