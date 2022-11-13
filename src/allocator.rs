@@ -17,7 +17,7 @@ use crate::{
     },
     TieredAllocator,
 };
-use nanorand::Rng;
+use nanorand::{Rng, WyRand};
 use once_cell::sync::OnceCell;
 use std::alloc::Layout;
 use std::sync::Mutex;
@@ -276,7 +276,8 @@ impl<T: HeapManager> AllocInner<T> {
 
                     // Tag the pointer to prevent ABA problem
                     // TODO: maybe random number is too expensive, any simpler ways?
-                    let tag: u8 = nanorand::tls_rng().generate_range(0..255);
+                    let mut rng = WyRand::new();
+                    let tag: u8 = rng.generate_range(0..255);
                     let tag = (tag as usize) << 56;
 
                     debug_assert!(std::mem::size_of::<AtomicListNode>() <= BLOCK_SIZES[index]);
