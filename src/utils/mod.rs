@@ -7,20 +7,23 @@ use std::alloc::Layout;
 
 use crate::heap::MemAddrRange;
 
+#[cfg(feature = "sans")]
 extern "C" {
     fn __asan_unpoison_memory_region(addr: *const u8, size: usize);
     fn __asan_poison_memory_region(addr: *const u8, size: usize);
 }
 
+#[allow(unused_variables)]
 pub(crate) fn poison_memory_region(addr: *const u8, size: usize) {
-    if cfg!(feature = "sans") {
-        unsafe {
-            __asan_poison_memory_region(addr, size);
-        }
+    #[cfg(feature = "sans")]
+    unsafe {
+        __asan_poison_memory_region(addr, size);
     }
 }
 
+#[allow(unused_variables)]
 pub(crate) fn unpoison_memory_region(addr: *const u8, size: usize) {
+    #[cfg(feature = "sans")]
     if cfg!(feature = "sans") {
         unsafe {
             __asan_unpoison_memory_region(addr, size);

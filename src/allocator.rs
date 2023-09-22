@@ -377,7 +377,7 @@ mod tests {
 
     impl Operation {
         fn gen(rng: &mut impl Rng) -> Self {
-            match rng.gen_range(0, 4) {
+            match rng.gen_range(0..4) {
                 0 => Operation::Alloc256,
                 1 => Operation::Alloc512,
                 2 => Operation::Alloc1024,
