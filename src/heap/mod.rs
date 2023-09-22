@@ -78,7 +78,7 @@ impl InnerHeap {
             return Err(AllocError::OutOfMemory);
         }
         self.next_alloc_addr = unsafe { self.next_alloc_addr.add(PAGE_SIZE) };
-        Ok(page_start as *mut u8)
+        Ok(page_start)
     }
 
     fn heap_end(&self) -> *const u8 {

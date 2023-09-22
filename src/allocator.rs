@@ -158,7 +158,7 @@ impl<T: HeapManager> AllocInner<T> {
                             Ordering::Acquire,
                             Ordering::Acquire,
                         ) {
-                            Ok(_) => return Ok(clean_node as *mut AtomicListNode as *mut u8),
+                            Ok(_) => return Ok(clean_node as *mut u8),
                             Err(v) => {
                                 node = v;
                                 poison_memory_region(node as *const u8, layout.size());
@@ -236,7 +236,7 @@ impl<T: HeapManager> AllocInner<T> {
                         Ordering::Acquire,
                     ) {
                         Ok(_) => {
-                            return Ok(page_mem as *mut u8);
+                            return Ok(page_mem);
                         }
                         Err(_v) => {
                             unreachable!("list node is locked, no one should contend with us")
@@ -380,7 +380,7 @@ mod tests {
 
     impl Operation {
         fn gen(rng: &mut impl Rng) -> Self {
-            match rng.gen_range(0, 4) {
+            match rng.gen_range(0..4) {
                 0 => Operation::Alloc256,
                 1 => Operation::Alloc512,
                 2 => Operation::Alloc1024,
