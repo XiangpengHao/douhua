@@ -1,8 +1,12 @@
 {
 	"rust-analyzer.cargo.features": [
-		"shuttle",
+		// "shuttle",
 		"shard-6",
 		"numa",
 		"pmem",
-	]
+	],
+	"lldb.displayFormat": "auto",
+	"lldb.showDisassembly": "auto",
+	"lldb.dereferencePointers": false,
+	"lldb.consoleMode": "commands"
 }

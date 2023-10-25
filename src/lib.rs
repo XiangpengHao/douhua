@@ -1,5 +1,6 @@
 #![feature(vec_into_raw_parts)]
 #![feature(thread_id_value)]
+#![feature(allocator_api)]
 
 #[cfg(feature = "pmem")]
 mod alchemy_alloc;
@@ -7,6 +8,7 @@ mod allocator;
 mod error;
 mod heap;
 mod list_node;
+mod remote_alloc;
 mod utils;
 
 use std::{alloc::Layout, ptr::NonNull};
@@ -15,6 +17,7 @@ use std::{alloc::Layout, ptr::NonNull};
 pub use alchemy_alloc::AlchemyAlloc;
 pub use allocator::Allocator;
 pub use error::AllocError;
+pub use remote_alloc::RemoteAlloc;
 pub use utils::MemType;
 
 /// # Safety

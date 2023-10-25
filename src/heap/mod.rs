@@ -8,6 +8,8 @@ use std::alloc::Layout;
 
 pub(crate) mod dram;
 
+pub(crate) mod shm;
+
 #[cfg(feature = "numa")]
 pub(crate) mod numa;
 
@@ -78,6 +80,17 @@ impl InnerHeap {
             return Err(AllocError::OutOfMemory);
         }
         self.next_alloc_addr = unsafe { self.next_alloc_addr.add(PAGE_SIZE) };
+        Ok(page_start)
+    }
+
+    fn expand_any_size(&mut self, size: usize) -> Result<*mut u8, AllocError> {
+        let aligned = align_up(size, PAGE_SIZE);
+        let page_start = self.next_alloc_addr;
+        if page_start as *const u8 == self.heap_end() {
+            return Err(AllocError::OutOfMemory);
+        }
+
+        self.next_alloc_addr = unsafe { self.next_alloc_addr.add(aligned) };
         Ok(page_start)
     }
 
